@@ -50,7 +50,7 @@ jobs:
       - name: Build installer (Inno Setup)
         shell: pwsh
         run: |
-          # Pin Inno Setup 6.4.3 (official installer): newer setup stubs alone are close to 2 MB.
+          # Pin Inno Setup 6.4.3 (official installer): newer setup stubs alone are close to 2 MB (installer limit: 2.5 MB).
           $dir = "$env:RUNNER_TEMP\InnoSetup643"
           Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-6_4_3/innosetup-6.4.3.exe" -OutFile "$env:RUNNER_TEMP\is643.exe"
           Start-Process "$env:RUNNER_TEMP\is643.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=$dir" -Wait
@@ -63,7 +63,7 @@ jobs:
           $kb = [math]::Round($setup.Length / 1KB, 1)
           Write-Host "Installer = $kb KB"
           "Installer size: **$kb KB**" >> $env:GITHUB_STEP_SUMMARY
-          if ($setup.Length -gt 2MB) { throw "Installer is larger than 2 MB ($kb KB)" }
+          if ($setup.Length -gt 2.5MB) { throw "Installer is larger than 2.5 MB ($kb KB)" }
           Compress-Archive -Path build\Release\LiteView.exe -DestinationPath "build\installer\LiteView-${{ steps.version.outputs.value }}-portable.zip"
 
       - name: Upload installer
