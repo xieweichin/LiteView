@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -36,3 +39,54 @@ jobs:
           name: LiteView-${{ github.sha }}
           path: build/Release/LiteView.exe
           if-no-files-found: error
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $m = Select-String -Path CMakeLists.txt -Pattern 'project\(LiteView VERSION ([0-9.]+)'
+          "value=$($m.Matches[0].Groups[1].Value)" >> $env:GITHUB_OUTPUT
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          # Pin Inno Setup 6.4.3 (official installer): newer setup stubs alone are close to 2 MB.
+          $dir = "$env:RUNNER_TEMP\InnoSetup643"
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-6_4_3/innosetup-6.4.3.exe" -OutFile "$env:RUNNER_TEMP\is643.exe"
+          Start-Process "$env:RUNNER_TEMP\is643.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=$dir" -Wait
+          $iscc = "$dir\ISCC.exe"
+          $stub = Get-Item "$dir\Setup.e32"
+          Write-Host "Setup.e32 = $([math]::Round($stub.Length / 1KB, 1)) KB"
+          & $iscc /Qp "/DAppVersion=${{ steps.version.outputs.value }}" installer\LiteView.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          $setup = Get-Item "build\installer\LiteView-${{ steps.version.outputs.value }}-setup.exe"
+          $kb = [math]::Round($setup.Length / 1KB, 1)
+          Write-Host "Installer = $kb KB"
+          "Installer size: **$kb KB**" >> $env:GITHUB_STEP_SUMMARY
+          if ($setup.Length -gt 2MB) { throw "Installer is larger than 2 MB ($kb KB)" }
+          Compress-Archive -Path build\Release\LiteView.exe -DestinationPath "build\installer\LiteView-${{ steps.version.outputs.value }}-portable.zip"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteView-setup-${{ github.sha }}
+          path: build/installer/*
+          if-no-files-found: error
+
+      # Every push to main refreshes the release for the version in CMakeLists.txt.
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.version.outputs.value }}"
+          $files = Get-ChildItem build\installer | ForEach-Object { $_.FullName }
+          gh release view "v$v" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "v$v" @files --clobber
+          } else {
+            gh release create "v$v" @files --target "${{ github.sha }}" --title "LiteView $v" --prerelease `
+              --notes "LiteView-$v-setup.exe：安裝檔（裝給目前使用者，不需系統管理員權限）。LiteView-$v-portable.zip：綠色版，解壓後在 LiteView.exe 旁放一個空的 portable.ini，設定與快取就存在同一個資料夾。"
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release failed" }
