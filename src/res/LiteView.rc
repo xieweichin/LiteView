@@ -240,6 +240,8 @@ BEGIN
     IDS_DOC_NO_HANDLER      "這台電腦沒有這種檔案的預覽程式。\n安裝 Microsoft Office 或對應的軟體後，就能在這裡預覽。"
     IDS_DOC_NO_HANDLER_SHORT "沒有預覽程式"
     IDS_PDF_PAGE            "第 %u / %u 頁（Ctrl+PageUp/PageDown 換頁）"
+    IDS_MODEL_ERROR         "無法開啟這個 3D 檔"
+    IDS_MODEL_TRIANGLES     "%u 個三角形（拖曳旋轉，/ 重設）"
     IDS_TEXT_TRUNCATED      "（檔案太大，只顯示前 8 MB）"
 
     IDS_NEW_FOLDER          "新增資料夾"

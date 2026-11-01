@@ -412,7 +412,8 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_CONTEXTMENU:
         if (reinterpret_cast<HWND>(wParam) == list_->Hwnd() || reinterpret_cast<HWND>(wParam) == viewer_.Hwnd() ||
-            reinterpret_cast<HWND>(wParam) == textView_.Hwnd() || reinterpret_cast<HWND>(wParam) == documentView_.Hwnd()) {
+            reinterpret_cast<HWND>(wParam) == textView_.Hwnd() || reinterpret_cast<HWND>(wParam) == documentView_.Hwnd() ||
+            reinterpret_cast<HWND>(wParam) == modelView_.Hwnd()) {
             ShowContextMenu(POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
             return 0;
         }
@@ -531,6 +532,13 @@ bool MainWindow::OnCreate() {
         };
         documentCallbacks.changed = [this] { UpdateViewerStatus(); };
         if (FAILED(documentView_.Create(hwnd_, instance_, accelViewer_, std::move(documentCallbacks)))) return false;
+    }
+    {
+        ModelView::Callbacks modelCallbacks;
+        modelCallbacks.changed = [this] { UpdateViewerStatus(); };
+        modelCallbacks.navigate = [this](int step) { ViewerStep(step); };
+        modelCallbacks.exit = [this] { ExitViewer(); };
+        if (FAILED(modelView_.Create(hwnd_, instance_, std::move(modelCallbacks)))) return false;
     }
     CreateMenus();
     SetBarItems();
@@ -701,6 +709,7 @@ void MainWindow::OnThemeChanged() {
     commandBar_.OnThemeChanged();
     textView_.OnThemeChanged();
     documentView_.OnThemeChanged();
+    modelView_.OnThemeChanged();
     RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
@@ -836,6 +845,7 @@ void MainWindow::Layout() {
         SetWindowPos(viewer_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(textView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(documentView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(modelView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
         InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
@@ -985,10 +995,12 @@ void MainWindow::OnCommand(UINT id) {
         UndoBatchRename();
         break;
     case IDM_ROTATE_LEFT:
-        RotateSelection(false);
+        if (mode_ == Mode::Viewer && viewerPageKind_ == ViewerPage::Model) modelView_.Turn(-1);
+        else RotateSelection(false);
         break;
     case IDM_ROTATE_RIGHT:
-        RotateSelection(true);
+        if (mode_ == Mode::Viewer && viewerPageKind_ == ViewerPage::Model) modelView_.Turn(1);
+        else RotateSelection(true);
         break;
     case IDM_NAV_TOGGLE_MODE:
         if (mode_ == Mode::Viewer) {
@@ -1019,18 +1031,21 @@ void MainWindow::OnCommand(UINT id) {
     case IDM_ZOOM_IN:
         if (mode_ == Mode::Viewer) {
             if (viewerPageKind_ == ViewerPage::Text) textView_.ZoomIn();
+            else if (viewerPageKind_ == ViewerPage::Model) modelView_.ZoomIn();
             else if (viewerPageKind_ == ViewerPage::Picture) viewer_.ZoomIn();
         }
         break;
     case IDM_ZOOM_OUT:
         if (mode_ == Mode::Viewer) {
             if (viewerPageKind_ == ViewerPage::Text) textView_.ZoomOut();
+            else if (viewerPageKind_ == ViewerPage::Model) modelView_.ZoomOut();
             else if (viewerPageKind_ == ViewerPage::Picture) viewer_.ZoomOut();
         }
         break;
     case IDM_ZOOM_TOGGLE_FIT:
         if (mode_ == Mode::Viewer) {
             if (viewerPageKind_ == ViewerPage::Text) textView_.ResetZoom();
+            else if (viewerPageKind_ == ViewerPage::Model) modelView_.ResetView();
             else if (viewerPageKind_ == ViewerPage::Picture) viewer_.ToggleFit();
         }
         break;
@@ -1659,9 +1674,11 @@ void MainWindow::ExitViewer() {
     ShowWindow(viewer_.Hwnd(), SW_HIDE);
     ShowWindow(textView_.Hwnd(), SW_HIDE);
     ShowWindow(documentView_.Hwnd(), SW_HIDE);
+    ShowWindow(modelView_.Hwnd(), SW_HIDE);
     viewer_.Clear();
     textView_.Clear();
     documentView_.Clear();
+    modelView_.Clear();
     viewerPageKind_ = ViewerPage::Picture;
     viewerIsText_ = false;
     viewerCache_->Retain({});
@@ -1712,12 +1729,16 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     }
     if (pageKind != ViewerPage::Text) textView_.Clear();
     if (pageKind != ViewerPage::Document) documentView_.Clear();
+    if (pageKind != ViewerPage::Model) modelView_.Clear();
     if (pageKind == ViewerPage::Text) {
         viewer_.Clear();
         textView_.Show(viewerPath_);
     } else if (pageKind == ViewerPage::Document) {
         viewer_.Clear();
         documentView_.Show(viewerPath_);
+    } else if (pageKind == ViewerPage::Model) {
+        viewer_.Clear();
+        modelView_.Show(viewerPath_);
     } else {
         ViewerImagePtr image = viewerCache_->Get(viewerKey_, side);
         ThumbnailPtr placeholder;
@@ -1751,7 +1772,7 @@ void MainWindow::ShowViewerPage() {
     // Called in viewer mode when the kind of the current file changes.
     HWND page = ViewerPageHwnd(viewerPageKind_);
     ShowWindow(page, SW_SHOW);
-    for (ViewerPage other : {ViewerPage::Picture, ViewerPage::Text, ViewerPage::Document}) {
+    for (ViewerPage other : {ViewerPage::Picture, ViewerPage::Text, ViewerPage::Document, ViewerPage::Model}) {
         if (other != viewerPageKind_) ShowWindow(ViewerPageHwnd(other), SW_HIDE);
     }
     SetFocus(page);
@@ -1761,6 +1782,7 @@ MainWindow::ViewerPage MainWindow::PageFor(FileKind kind) {
     switch (kind) {
     case FileKind::Text: return ViewerPage::Text;
     case FileKind::Document: return ViewerPage::Document;
+    case FileKind::Model: return ViewerPage::Model;
     default: return ViewerPage::Picture;  // pictures and PDF pages
     }
 }
@@ -1769,6 +1791,7 @@ HWND MainWindow::ViewerPageHwnd(ViewerPage page) const {
     switch (page) {
     case ViewerPage::Text: return textView_.Hwnd();
     case ViewerPage::Document: return documentView_.Hwnd();
+    case ViewerPage::Model: return modelView_.Hwnd();
     default: return viewer_.Hwnd();
     }
 }
@@ -1829,6 +1852,13 @@ void MainWindow::UpdateViewerStatus() {
         default: SetStatusText(2, LoadStr(IDS_DOC_PREVIEW)); break;
         }
         SetStatusText(3, std::wstring());
+    } else if (viewerPageKind_ == ViewerPage::Model) {
+        if (modelView_.Loading()) SetStatusText(2, LoadStr(IDS_VIEWER_LOADING));
+        else if (modelView_.Failed()) SetStatusText(2, LoadStr(IDS_MODEL_ERROR));
+        else SetStatusText(2, Format(LoadStr(IDS_MODEL_TRIANGLES), modelView_.Triangles()));
+        SetStatusText(3, modelView_.Loading() || modelView_.Failed()
+                             ? std::wstring()
+                             : Format(LoadStr(IDS_VIEWER_ZOOM), static_cast<std::size_t>(modelView_.ZoomPercent())));
     } else if (viewerIsText_) {
         if (textView_.Loading()) {
             SetStatusText(2, LoadStr(IDS_VIEWER_LOADING));
@@ -1884,6 +1914,7 @@ void MainWindow::SetFullscreen(bool fullscreen) {
     viewer_.SetFullscreen(fullscreen_);
     textView_.SetFullscreen(fullscreen_);
     documentView_.SetFullscreen(fullscreen_);
+    modelView_.SetFullscreen(fullscreen_);
     OnSize();
 }
 
