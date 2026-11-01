@@ -26,3 +26,7 @@ bool IsPdfPath(const std::wstring& path) noexcept;
 HRESULT RenderPdfPage(const std::wstring& file, UINT page, UINT maxSide,
                       Microsoft::WRL::ComPtr<IWICBitmapSource>& bitmap, UINT& width, UINT& height,
                       UINT& fullWidth, UINT& fullHeight, UINT& pageCount) noexcept;
+
+// Which step of the last RenderPdfPage call on this thread failed (0 = none);
+// for diagnostics in tests.
+int LastPdfRenderStep() noexcept;

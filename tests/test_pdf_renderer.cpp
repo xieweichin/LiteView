@@ -66,6 +66,7 @@ TEST_CASE("Windows renders PDF pages through the image decoder") {
         MESSAGE("Windows.Data.Pdf is not available here; skipping render checks");
         return;
     }
+    if (FAILED(hr)) MESSAGE("PDF render failed at step " << LastPdfRenderStep() << ", hr " << std::hex << hr);
     REQUIRE(hr == S_OK);
     CHECK(first.pageCount == 2);
     CHECK(first.width == 200);   // 200 x 100 pt page, long side fitted to 200

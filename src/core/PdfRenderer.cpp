@@ -144,7 +144,11 @@ HRESULT Activate(const wchar_t* className, ComPtr<IInspectable>& out) {
     return RoActivateInstance(name.value, out.GetAddressOf());
 }
 
+thread_local int g_lastStep = 0;
+
 }  // namespace
+
+int LastPdfRenderStep() noexcept { return g_lastStep; }
 
 std::wstring PdfPagePath(const std::wstring& file, UINT page) {
     if (page == 0) return file;
@@ -182,41 +186,42 @@ bool IsPdfPath(const std::wstring& path) noexcept {
 HRESULT RenderPdfPage(const std::wstring& file, UINT page, UINT maxSide, ComPtr<IWICBitmapSource>& bitmap,
                       UINT& width, UINT& height, UINT& fullWidth, UINT& fullHeight, UINT& pageCount) noexcept {
     bitmap.Reset();
+    g_lastStep = 0;
     width = height = fullWidth = fullHeight = pageCount = 0;
     try {
         // Open the file as a WinRT stream (no StorageFile broker needed).
         ComPtr<IInspectable> input;
         HRESULT hr = CreateRandomAccessStreamOnFile(file.c_str(), 0 /* FileAccessMode.Read */, kIidRandomAccessStream,
                                                     reinterpret_cast<void**>(input.GetAddressOf()));
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 1; return hr; }
 
         HString className(L"Windows.Data.Pdf.PdfDocument");
         if (FAILED(className.result)) return className.result;
         ComPtr<IPdfDocumentStaticsLite> statics;
         hr = RoGetActivationFactory(className.value, kIidPdfDocumentStatics,
                                     reinterpret_cast<void**>(statics.GetAddressOf()));
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 2; return hr; }
         ComPtr<IPdfDocumentOperation> load;
         hr = statics->LoadFromStreamAsync(input.Get(), load.GetAddressOf());
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 3; return hr; }
         hr = Wait(load.Get());
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 4; return hr; }
         ComPtr<IPdfDocumentLite> document;
         hr = load->GetResults(document.GetAddressOf());
-        if (FAILED(hr)) return hr;
-        if (!document) return E_FAIL;
+        if (FAILED(hr)) { g_lastStep = 5; return hr; }
+        if (!document) { g_lastStep = 90; return E_FAIL; }
 
         UINT32 count = 0;
         hr = document->get_PageCount(&count);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 6; return hr; }
         if (count == 0) return WINCODEC_ERR_BADIMAGE;
         if (page >= count) page = count - 1;
         ComPtr<IPdfPageLite> pdfPage;
         hr = document->GetPage(page, pdfPage.GetAddressOf());
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 7; return hr; }
         PdfSize size{};
         hr = pdfPage->get_Size(&size);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 8; return hr; }
         if (!(size.width > 0.5f) || !(size.height > 0.5f)) return WINCODEC_ERR_BADIMAGE;
 
         // Full size: 2 px per DIP, capped; then fit maxSide without enlarging.
@@ -230,55 +235,55 @@ HRESULT RenderPdfPage(const std::wstring& file, UINT page, UINT maxSide, ComPtr<
 
         ComPtr<IInspectable> optionsObject;
         hr = Activate(L"Windows.Data.Pdf.PdfPageRenderOptions", optionsObject);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 9; return hr; }
         ComPtr<IPdfPageRenderOptionsLite> options;
         hr = optionsObject->QueryInterface(kIidPdfPageRenderOptions, reinterpret_cast<void**>(options.GetAddressOf()));
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 10; return hr; }
         options->put_DestinationWidth(w);
         options->put_DestinationHeight(h);
         options->put_BitmapEncoderId(GUID_ContainerFormatBmp);  // cheaper to write and read back than PNG
 
         ComPtr<IInspectable> memory;
         hr = Activate(L"Windows.Storage.Streams.InMemoryRandomAccessStream", memory);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 11; return hr; }
         ComPtr<IInspectable> output;
         hr = memory->QueryInterface(kIidRandomAccessStream, reinterpret_cast<void**>(output.GetAddressOf()));
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 12; return hr; }
         ComPtr<IAsyncActionLite> render;
         hr = pdfPage->RenderWithOptionsToStreamAsync(output.Get(), options.Get(), render.GetAddressOf());
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 13; return hr; }
         hr = Wait(render.Get());
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 14; return hr; }
         hr = render->GetResults();
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 15; return hr; }
 
         // Read the rendered bitmap back with WIC.
         ComPtr<IStream> stream;
         hr = CreateStreamOverRandomAccessStream(output.Get(), IID_PPV_ARGS(stream.GetAddressOf()));
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 16; return hr; }
         LARGE_INTEGER zero{};
         hr = stream->Seek(zero, STREAM_SEEK_SET, nullptr);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 17; return hr; }
         ComPtr<IWICImagingFactory> factory;
         hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.GetAddressOf()));
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 18; return hr; }
         ComPtr<IWICBitmapDecoder> decoder;
         hr = factory->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf());
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 19; return hr; }
         ComPtr<IWICBitmapFrameDecode> frame;
         hr = decoder->GetFrame(0, frame.GetAddressOf());
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 20; return hr; }
         ComPtr<IWICFormatConverter> converter;
         hr = factory->CreateFormatConverter(converter.GetAddressOf());
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 21; return hr; }
         hr = converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0,
                                    WICBitmapPaletteTypeCustom);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 22; return hr; }
         ComPtr<IWICBitmap> cached;
         hr = factory->CreateBitmapFromSource(converter.Get(), WICBitmapCacheOnLoad, cached.GetAddressOf());
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 23; return hr; }
         hr = cached->GetSize(&width, &height);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr)) { g_lastStep = 24; return hr; }
         bitmap = cached;
         pageCount = count;
         fullWidth = std::max(1u, static_cast<UINT>(std::lround(size.width * fullSide / longest)));
@@ -287,6 +292,7 @@ HRESULT RenderPdfPage(const std::wstring& file, UINT page, UINT maxSide, ComPtr<
     } catch (const std::bad_alloc&) {
         return E_OUTOFMEMORY;
     } catch (...) {
+        g_lastStep = 99;
         return E_FAIL;
     }
 }
