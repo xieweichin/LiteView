@@ -2,10 +2,15 @@ add_executable(LiteViewTests
     test_main.cpp
     test_smoke.cpp
     test_folder_model.cpp
+    test_image_decoder.cpp
     test_settings.cpp
     test_thread_pool.cpp)
 target_include_directories(LiteViewTests PRIVATE third_party)
 target_link_libraries(LiteViewTests PRIVATE LiteViewCore)
+add_custom_target(LiteViewTestFixtures
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/fixtures" "$<TARGET_FILE_DIR:LiteViewTests>/fixtures")
+add_dependencies(LiteViewTests LiteViewTestFixtures)
 
 add_test(NAME LiteViewTests COMMAND LiteViewTests)
 set_tests_properties(LiteViewTests PROPERTIES
