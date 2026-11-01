@@ -1105,7 +1105,15 @@ void MainWindow::OnCommand(UINT id) {
     case IDM_HELP_ABOUT: {
         const std::wstring text = LoadStr(IDS_ABOUT_TEXT);
         const std::wstring title = LoadStr(IDS_APP_TITLE);
-        MessageBoxW(hwnd_, text.c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
+        MSGBOXPARAMSW params{};
+        params.cbSize = sizeof(params);
+        params.hwndOwner = hwnd_;
+        params.hInstance = GetModuleHandleW(nullptr);
+        params.lpszText = text.c_str();
+        params.lpszCaption = title.c_str();
+        params.dwStyle = MB_OK | MB_USERICON;
+        params.lpszIcon = MAKEINTRESOURCEW(IDI_APP);
+        MessageBoxIndirectW(&params);
         break;
     }
     default:

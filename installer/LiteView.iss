@@ -34,9 +34,9 @@ UninstallDisplayName=LiteView
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-; 不放精靈圖片，讓安裝檔維持在 2.5 MB 以內。
+; 不放左側大圖，讓安裝檔維持在 2.5 MB 以內；右上角只放小 logo（一般／高 DPI 兩種）。
 WizardImageFile=
-WizardSmallImageFile=
+WizardSmallImageFile=WizardSmall-55.bmp,WizardSmall-110.bmp
 ChangesAssociations=yes
 CloseApplications=yes
 
