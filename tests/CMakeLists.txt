@@ -6,6 +6,7 @@ add_executable(LiteViewTests
     test_text_document.cpp
     test_pdf_renderer.cpp
     test_vector_renderer.cpp
+    test_model_loader.cpp
     test_image_decoder.cpp
     test_settings.cpp
     test_thread_pool.cpp

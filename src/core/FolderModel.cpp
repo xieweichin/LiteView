@@ -1,5 +1,7 @@
 #include "core/FolderModel.h"
 
+#include "core/ModelLoader.h"
+
 #include "core/FormatSupport.h"
 #include "core/TextDocument.h"
 
@@ -186,6 +188,7 @@ void FolderModel::Load(const std::shared_ptr<State>& state, std::wstring path,
                                            _wcsicmp(extension, L".wmf") == 0))
                                 kind = FileKind::Vector;
                             if (!image && IsDocumentExtension(extension)) kind = FileKind::Document;
+                            if (!image && ModelFormatForExtension(extension) != ModelFormat::None) kind = FileKind::Model;
                             if (!image && kind == FileKind::Image) {
                                 // A known format whose codec extension is not installed.
                                 if (CodecPackForExtension(extension, pack)) {

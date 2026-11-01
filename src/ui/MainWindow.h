@@ -15,6 +15,7 @@
 #include "ui/FolderTree.h"
 #include "ui/PreviewPane.h"
 #include "ui/DocumentView.h"
+#include "ui/ModelView.h"
 #include "ui/TextView.h"
 #include "ui/ViewerView.h"
 #include "core/ViewerCache.h"
@@ -219,7 +220,8 @@ private:
     ViewerView viewer_;
     TextView textView_;      // viewer mode for text files
     DocumentView documentView_;  // viewer mode for Office documents
-    enum class ViewerPage { Picture, Text, Document };
+    ModelView modelView_;        // viewer mode for 3D models
+    enum class ViewerPage { Picture, Text, Document, Model };
     ViewerPage viewerPageKind_ = ViewerPage::Picture;
     bool viewerIsText_ = false;  // viewerPageKind_ == Text
     static ViewerPage PageFor(FileKind kind);

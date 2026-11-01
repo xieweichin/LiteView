@@ -16,3 +16,5 @@ constexpr UINT WM_APP_VIEWER_READY = WM_APP + 9;     // ViewerCache finished a d
 constexpr UINT WM_APP_ROTATED = WM_APP + 10;         // a background rotation finished
 constexpr UINT WM_APP_TEXT_READY = WM_APP + 11;      // TextView: its file finished loading
 constexpr UINT WM_APP_DOCUMENT_LOAD = WM_APP + 12;   // DocumentView: start the preview handler
+constexpr UINT WM_APP_MODEL_LOADED = WM_APP + 13;    // ModelView: its file finished loading
+constexpr UINT WM_APP_MODEL_FRAME = WM_APP + 14;     // ModelView: a frame finished drawing

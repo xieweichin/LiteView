@@ -109,3 +109,7 @@
 #define IDS_DOC_ERROR               1901
 #define IDS_DOC_NO_HANDLER          1902
 #define IDS_DOC_NO_HANDLER_SHORT    1903
+
+// 3D models
+#define IDS_MODEL_ERROR             2000
+#define IDS_MODEL_TRIANGLES         2001

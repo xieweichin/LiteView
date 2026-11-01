@@ -41,6 +41,9 @@ add_library(LiteViewCore STATIC
     src/core/FormatSupport.cpp
     src/core/PdfRenderer.cpp
     src/core/VectorRenderer.cpp
+    src/core/Zip.cpp
+    src/core/ModelLoader.cpp
+    src/core/ModelRenderer.cpp
     src/core/TextDocument.cpp
     src/core/ImageDecoder.cpp
     src/core/Metadata.cpp
@@ -67,6 +70,8 @@ add_executable(LiteView WIN32
     src/ui/TextView.cpp
     src/ui/DocumentView.cpp
     src/ui/DocumentView.h
+    src/ui/ModelView.cpp
+    src/ui/ModelView.h
     src/ui/TextView.h
     src/ui/PreviewPane.h
     src/ui/ViewerView.cpp

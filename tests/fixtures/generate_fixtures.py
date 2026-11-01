@@ -66,3 +66,40 @@ def write_pdf(path, pages):
 
 
 write_pdf(DEST / "two-pages.pdf", [(200, 100), (100, 200)])
+
+
+def write_3mf(path):
+    """Write a deflated 3MF package: a 10 mm cube in red, placed twice by a component object."""
+    import zipfile
+
+    v = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0), (0, 0, 10), (10, 0, 10), (10, 10, 10), (0, 10, 10)]
+    t = [(0, 2, 1), (0, 3, 2), (4, 5, 6), (4, 6, 7), (0, 1, 5), (0, 5, 4),
+         (1, 2, 6), (1, 6, 5), (2, 3, 7), (2, 7, 6), (3, 0, 4), (3, 4, 7)]
+    vertices = "".join(f'<vertex x="{x}" y="{y}" z="{z}"/>' for x, y, z in v)
+    triangles = "".join(f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in t)
+    model = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">'
+        '<resources><basematerials id="1"><base name="Red" displaycolor="#FF0000"/></basematerials>'
+        f'<object id="2" type="model" pid="1" pindex="0"><mesh><vertices>{vertices}</vertices>'
+        f'<triangles>{triangles}</triangles></mesh></object>'
+        '<object id="3" type="model"><components><component objectid="2"/>'
+        '<component objectid="2" transform="1 0 0 0 1 0 0 0 1 20 0 0"/></components></object>'
+        '</resources><build><item objectid="3"/></build></model>')
+    rels = ('<?xml version="1.0" encoding="UTF-8"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Target="/3D/3dmodel.model" Id="rel0" '
+            'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>')
+    types = ('<?xml version="1.0" encoding="UTF-8"?>'
+             '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+             '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+             '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>'
+             '</Types>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as package:
+        for name, text in (("[Content_Types].xml", types), ("_rels/.rels", rels), ("3D/3dmodel.model", model)):
+            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            package.writestr(info, text)
+
+
+write_3mf(DEST / "two-cubes.3mf")
