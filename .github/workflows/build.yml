@@ -1,0 +1,38 @@
+name: build
+
+on:
+  push:
+    branches: [main, master, 'claude/**', 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Check executable size (<= 2 MB)
+        shell: pwsh
+        run: |
+          $exe = Get-Item build/Release/LiteView.exe
+          $kb = [math]::Round($exe.Length / 1KB, 1)
+          Write-Host "LiteView.exe = $kb KB"
+          "LiteView.exe size: **$kb KB**" >> $env:GITHUB_STEP_SUMMARY
+          if ($exe.Length -gt 2MB) { throw "LiteView.exe is larger than 2 MB ($kb KB)" }
+
+      - name: Upload LiteView.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteView-${{ github.sha }}
+          path: build/Release/LiteView.exe
+          if-no-files-found: error

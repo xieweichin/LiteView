@@ -1,0 +1,158 @@
+// LiteView resources. Saved as UTF-8; all user-visible text lives here.
+#pragma code_page(65001)
+
+#include <windows.h>
+#include <commctrl.h>
+#include "resource.h"
+#include "../ui/Commands.h"
+
+LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_TRADITIONAL
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "LiteView.manifest"
+
+IDI_APP ICON "LiteView.ico"
+
+// ---- Version ----------------------------------------------------------------
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040404b0"
+        BEGIN
+            VALUE "FileDescription", "LiteView 看圖程式"
+            VALUE "FileVersion", "0.1.0"
+            VALUE "InternalName", "LiteView"
+            VALUE "OriginalFilename", "LiteView.exe"
+            VALUE "ProductName", "LiteView"
+            VALUE "ProductVersion", "0.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x404, 1200
+    END
+END
+
+// ---- Menu -------------------------------------------------------------------
+IDR_MAINMENU MENU
+BEGIN
+    POPUP "檔案(&F)"
+    BEGIN
+        MENUITEM "開啟資料夾(&O)...",            IDM_FILE_OPEN_FOLDER
+        MENUITEM "新增資料夾(&N)",               IDM_FILE_NEW_FOLDER
+        MENUITEM SEPARATOR
+        MENUITEM "圖片資訊(&I)\tAlt+Enter",      IDM_FILE_PROPERTIES
+        MENUITEM SEPARATOR
+        MENUITEM "結束(&X)",                     IDM_FILE_EXIT
+    END
+    POPUP "編輯(&E)"
+    BEGIN
+        MENUITEM "複製到(&C)...",                IDM_EDIT_COPY_TO
+        MENUITEM "移動到(&M)...",                IDM_EDIT_MOVE_TO
+        MENUITEM "刪除(&D)\tDelete",             IDM_EDIT_DELETE
+        MENUITEM SEPARATOR
+        MENUITEM "改名(&R)\tF2",                 IDM_EDIT_RENAME
+        MENUITEM "批次改名(&B)...\tCtrl+F2",     IDM_EDIT_BATCH_RENAME
+        MENUITEM "復原上次批次改名(&U)",         IDM_EDIT_UNDO_BATCH_RENAME
+        MENUITEM SEPARATOR
+        MENUITEM "全選(&A)\tCtrl+A",             IDM_EDIT_SELECT_ALL
+    END
+    POPUP "檢視(&V)"
+    BEGIN
+        MENUITEM "縮圖(&T)",                     IDM_VIEW_THUMBNAILS
+        MENUITEM "大圖示(&G)",                   IDM_VIEW_LARGE_ICONS
+        MENUITEM "清單(&L)",                     IDM_VIEW_LIST
+        MENUITEM "詳細資料(&D)",                 IDM_VIEW_DETAILS
+        MENUITEM SEPARATOR
+        POPUP "排序方式(&S)"
+        BEGIN
+            MENUITEM "名稱(&N)",                 IDM_SORT_NAME
+            MENUITEM "大小(&S)",                 IDM_SORT_SIZE
+            MENUITEM "類型(&T)",                 IDM_SORT_TYPE
+            MENUITEM "修改日期(&M)",             IDM_SORT_MODIFIED
+        END
+        MENUITEM SEPARATOR
+        MENUITEM "看圖 / 返回瀏覽(&V)\tEnter",   IDM_NAV_TOGGLE_MODE
+        MENUITEM "全螢幕(&F)\tCtrl+F",           IDM_VIEW_FULLSCREEN
+        MENUITEM "自動播放(&P)\tCtrl+S",         IDM_VIEW_SLIDESHOW
+        MENUITEM SEPARATOR
+        MENUITEM "上層資料夾(&U)\tBackspace",    IDM_NAV_PARENT_FOLDER
+        MENUITEM "重新整理(&R)\tF5",             IDM_VIEW_REFRESH
+    END
+    POPUP "工具(&T)"
+    BEGIN
+        MENUITEM "向左旋轉(&L)\tCtrl+[",         IDM_ROTATE_LEFT
+        MENUITEM "向右旋轉(&R)\tCtrl+]",         IDM_ROTATE_RIGHT
+    END
+    POPUP "說明(&H)"
+    BEGIN
+        MENUITEM "關於 LiteView(&A)",            IDM_HELP_ABOUT
+    END
+END
+
+// ---- Accelerators -----------------------------------------------------------
+// 瀏覽模式：方向鍵、Home、End 交給 ListView 本身處理選取。
+IDR_ACCEL_BROWSER ACCELERATORS
+BEGIN
+    VK_RETURN,  IDM_NAV_TOGGLE_MODE,        VIRTKEY, NOINVERT
+    VK_RETURN,  IDM_FILE_PROPERTIES,        VIRTKEY, ALT, NOINVERT
+    VK_BACK,    IDM_NAV_PARENT_FOLDER,      VIRTKEY, NOINVERT
+    VK_F5,      IDM_VIEW_REFRESH,           VIRTKEY, NOINVERT
+    VK_F2,      IDM_EDIT_RENAME,            VIRTKEY, NOINVERT
+    VK_F2,      IDM_EDIT_BATCH_RENAME,      VIRTKEY, CONTROL, NOINVERT
+    VK_DELETE,  IDM_EDIT_DELETE,            VIRTKEY, NOINVERT
+    "A",        IDM_EDIT_SELECT_ALL,        VIRTKEY, CONTROL, NOINVERT
+    "S",        IDM_VIEW_SLIDESHOW,         VIRTKEY, CONTROL, NOINVERT
+    VK_OEM_4,   IDM_ROTATE_LEFT,            VIRTKEY, CONTROL, NOINVERT
+    VK_OEM_6,   IDM_ROTATE_RIGHT,           VIRTKEY, CONTROL, NOINVERT
+END
+
+IDR_ACCEL_VIEWER ACCELERATORS
+BEGIN
+    VK_RETURN,  IDM_NAV_TOGGLE_MODE,        VIRTKEY, NOINVERT
+    VK_ESCAPE,  IDM_NAV_EXIT_VIEWER,        VIRTKEY, NOINVERT
+    VK_RETURN,  IDM_FILE_PROPERTIES,        VIRTKEY, ALT, NOINVERT
+    VK_NEXT,    IDM_NAV_NEXT,               VIRTKEY, NOINVERT
+    VK_SPACE,   IDM_NAV_NEXT,               VIRTKEY, NOINVERT
+    VK_PRIOR,   IDM_NAV_PREV,               VIRTKEY, NOINVERT
+    VK_BACK,    IDM_NAV_PREV,               VIRTKEY, NOINVERT
+    VK_HOME,    IDM_NAV_FIRST,              VIRTKEY, NOINVERT
+    VK_END,     IDM_NAV_LAST,               VIRTKEY, NOINVERT
+    VK_ADD,     IDM_ZOOM_IN,                VIRTKEY, NOINVERT
+    VK_OEM_PLUS, IDM_ZOOM_IN,               VIRTKEY, NOINVERT
+    VK_SUBTRACT, IDM_ZOOM_OUT,              VIRTKEY, NOINVERT
+    VK_OEM_MINUS, IDM_ZOOM_OUT,             VIRTKEY, NOINVERT
+    VK_DIVIDE,  IDM_ZOOM_TOGGLE_FIT,        VIRTKEY, NOINVERT
+    "F",        IDM_VIEW_FULLSCREEN,        VIRTKEY, CONTROL, NOINVERT
+    "S",        IDM_VIEW_SLIDESHOW,         VIRTKEY, CONTROL, NOINVERT
+    VK_OEM_4,   IDM_ROTATE_LEFT,            VIRTKEY, CONTROL, NOINVERT
+    VK_OEM_6,   IDM_ROTATE_RIGHT,           VIRTKEY, CONTROL, NOINVERT
+    VK_F2,      IDM_EDIT_RENAME,            VIRTKEY, NOINVERT
+    VK_DELETE,  IDM_EDIT_DELETE,            VIRTKEY, NOINVERT
+END
+
+// ---- Strings ----------------------------------------------------------------
+STRINGTABLE
+BEGIN
+    IDS_APP_TITLE           "LiteView"
+    IDS_ABOUT_TEXT          "LiteView 0.1.0\n輕巧快速的看圖程式。"
+    IDS_STATUS_READY        "就緒"
+    IDS_NOT_IMPLEMENTED     "這個功能還沒做好。"
+    IDS_ERR_STARTUP         "LiteView 無法啟動（錯誤碼 %s）。"
+
+    // Toolbar tooltips (string ID = command ID)
+    IDM_NAV_PARENT_FOLDER   "上層資料夾 (Backspace)"
+    IDM_VIEW_REFRESH        "重新整理 (F5)"
+    IDM_NAV_TOGGLE_MODE     "看圖 (Enter)"
+    IDM_ROTATE_LEFT         "向左旋轉 (Ctrl+[)"
+    IDM_ROTATE_RIGHT        "向右旋轉 (Ctrl+])"
+    IDM_EDIT_DELETE         "刪除 (Delete)"
+    IDM_FILE_PROPERTIES     "圖片資訊 (Alt+Enter)"
+END
