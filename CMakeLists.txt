@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.25)
 cmake_policy(SET CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(LiteView VERSION 0.1.0 LANGUAGES CXX RC)
+project(LiteView VERSION 0.2.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -69,11 +69,15 @@ add_executable(LiteView WIN32
     src/ui/ViewerView.h
     src/ui/Messages.h
     src/ui/Commands.h
+    src/ui/CommandBar.cpp
+    src/ui/CommandBar.h
+    src/ui/Theme.cpp
+    src/ui/Theme.h
     src/res/resource.h
     src/res/LiteView.rc)
 target_include_directories(LiteView PRIVATE src src/res)
 target_link_libraries(LiteView PRIVATE LiteViewCore liteview_options
-    comctl32 shlwapi ole32 shell32 uuid uxtheme msimg32 d2d1)
+    comctl32 shlwapi ole32 shell32 uuid uxtheme msimg32 d2d1 dwmapi)
 
 if(MSVC)
     # The manifest is embedded by LiteView.rc.

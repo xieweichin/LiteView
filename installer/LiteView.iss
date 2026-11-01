@@ -1,9 +1,9 @@
 ﻿; LiteView 安裝檔（Inno Setup 6）
-; 建置：iscc /DAppVersion=0.1.0 /DSourceExe=..\build\Release\LiteView.exe installer\LiteView.iss
+; 建置：iscc /DAppVersion=0.2.0 /DSourceExe=..\build\Release\LiteView.exe installer\LiteView.iss
 ; 只裝給目前使用者，不需要系統管理員權限；檔案關聯寫在 HKCU，預設不勾。
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.2.0"
 #endif
 #ifndef SourceExe
   #define SourceExe "..\build\Release\LiteView.exe"

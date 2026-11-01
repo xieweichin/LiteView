@@ -10,6 +10,7 @@
 
 #include "core/FolderModel.h"
 #include "core/ThumbnailService.h"
+#include "ui/CommandBar.h"
 #include "ui/FileListView.h"
 #include "ui/FolderTree.h"
 #include "ui/PreviewPane.h"
@@ -18,9 +19,11 @@
 
 class ThreadPool;
 
-// Top-level frame: menu, toolbar, path bar, status bar and the browser panes
-// (folder tree and preview on the left, file list on the right). Owns the
-// per-mode accelerator tables.
+// Top-level frame in the Windows 11 style: an address row (up, refresh,
+// path), a command bar whose buttons change with the mode, a painted status
+// line and the browser panes (folder tree and preview on the left, file list
+// on the right). The classic menus live behind the command bar's "..."
+// button and still open with Alt / F10. Owns the per-mode accelerator tables.
 class MainWindow {
 public:
     enum class Mode { Browser, Viewer };
@@ -127,17 +130,28 @@ private:
     void OnLButtonUp();
     bool OnSetCursor();
 
-    void CreateToolbar();
-    void CreateStatusBar();
     void CreatePathBar();
-    void UpdateStatusParts();
+    void CreateMenus();
+    void SetBarItems();
+    void ShowBarMenu(UINT command, bool fromKeyboard);
+    bool OnKeyMenu(wchar_t key);
+    void OnThemeChanged();
+    void OnPaint();
+    void PaintChrome(HDC dc, const RECT& client);
+    int TextHeight() const;
     std::wstring LoadStr(UINT id) const;
 
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
-    HWND toolbar_ = nullptr;
-    HWND status_ = nullptr;
+    CommandBar navBar_;      // up / refresh, left of the path field
+    CommandBar commandBar_;  // per-mode commands
     HWND pathBar_ = nullptr;
+    RECT fieldRect_{};       // rounded box drawn around the path bar
+    RECT statusRect_{};
+    std::wstring statusText_[4];  // message | file count | selection | selection size
+    HMENU moreMenu_ = nullptr;    // the full menu, opened from "..." or Alt
+    HMENU viewMenu_ = nullptr;    // view modes, opened from the "View" button
+    HMENU sortMenu_ = nullptr;    // submenu of moreMenu_, not owned
     HFONT font_ = nullptr;
     HACCEL accelBrowser_ = nullptr;
     HACCEL accelViewer_ = nullptr;
@@ -176,7 +190,6 @@ private:
     int slideshowSeconds_ = 3;
     WINDOWPLACEMENT windowedPlacement_{sizeof(WINDOWPLACEMENT)};
     LONG_PTR windowedStyle_ = 0;
-    HMENU menu_ = nullptr;
     int selectIndexAfterLoad_ = -1;  // keeps the cursor in place after a delete or move
 
     struct RotateState;

@@ -42,7 +42,9 @@ Windows API    Win32 · ComCtl32 v6 · WIC · Direct2D · Shell (IFileOperation,
 
 | 層 | 模組 | 職責 | 對應規格功能 |
 | --- | --- | --- | --- |
-| 介面 | `MainWindow` | 主框架、工具列、狀態列、瀏覽 ↔ 檢視切換、快捷鍵表（Accelerator） | 模式切換、快捷鍵 |
+| 介面 | `MainWindow` | 主框架、網址列、狀態列、瀏覽 ↔ 檢視切換、快捷鍵表（Accelerator） | 模式切換、快捷鍵 |
+| 介面 | `CommandBar` | 自繪的 Windows 11 風格指令列（圖示字型、下拉按鈕、提示） | 工具按鈕 |
+| 介面 | `Theme` | 深色／淺色配色、標題列、標準控制項與對話框的深色樣式 | 外觀 |
 | 介面 | `FolderTree` | 左上資料夾樹，延遲展開子資料夾 | 資料夾樹 |
 | 介面 | `FileListView` | 虛擬 ListView（`LVS_OWNERDATA`），四種檢視、多選、自繪縮圖 | 縮圖清單、四種檢視 |
 | 介面 | `PreviewPane` | 左下預覽窗 | 預覽窗 |

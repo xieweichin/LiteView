@@ -10,6 +10,7 @@
 
 #include "core/Metadata.h"
 #include "res/resource.h"
+#include "ui/Theme.h"
 
 namespace {
 
@@ -137,7 +138,16 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT msg, WPARAM wParam, LPARAM lParam)
             ListView_SetItemText(list, row, 1, entry.second.data());
             ++row;
         }
+        theme::ApplyDialog(dialog);
         return TRUE;
+    }
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLOREDIT: {
+        LRESULT brush = 0;
+        if (theme::HandleCtlColor(msg, wParam, lParam, brush)) return static_cast<INT_PTR>(brush);
+        break;
     }
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {

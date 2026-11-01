@@ -14,8 +14,8 @@ IDI_APP ICON "LiteView.ico"
 
 // ---- Version ----------------------------------------------------------------
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION 0,2,0,0
+ PRODUCTVERSION 0,2,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -27,11 +27,11 @@ BEGIN
         BLOCK "040404b0"
         BEGIN
             VALUE "FileDescription", "LiteView 看圖程式"
-            VALUE "FileVersion", "0.1.0"
+            VALUE "FileVersion", "0.2.0"
             VALUE "InternalName", "LiteView"
             VALUE "OriginalFilename", "LiteView.exe"
             VALUE "ProductName", "LiteView"
-            VALUE "ProductVersion", "0.1.0"
+            VALUE "ProductVersion", "0.2.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -202,7 +202,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_APP_TITLE           "LiteView"
-    IDS_ABOUT_TEXT          "LiteView 0.1.0\n輕巧快速的看圖程式。"
+    IDS_ABOUT_TEXT          "LiteView 0.2.0\n輕巧快速的看圖程式。"
     IDS_STATUS_READY        "就緒"
     IDS_NOT_IMPLEMENTED     "這個功能還沒做好。"
     IDS_ERR_STARTUP         "LiteView 無法啟動（錯誤碼 %s）。"
@@ -260,12 +260,29 @@ BEGIN
     IDS_ERR_UNDO_RENAME     "無法復原批次改名：%s"
     IDS_BR_NOTHING_TO_UNDO  "沒有可以復原的批次改名。"
 
-    // Toolbar tooltips (string ID = command ID)
+    IDS_BAR_VIEW_PICTURE    "看圖"
+    IDS_BAR_BROWSE          "瀏覽"
+    IDS_BAR_SORT            "排序"
+    IDS_BAR_VIEW            "檢視"
+
+    // Command bar tooltips (string ID = command ID)
     IDM_NAV_PARENT_FOLDER   "上層資料夾 (Backspace)"
     IDM_VIEW_REFRESH        "重新整理 (F5)"
     IDM_NAV_TOGGLE_MODE     "看圖 (Enter)"
+    IDM_NAV_EXIT_VIEWER     "返回瀏覽 (Esc)"
+    IDM_NAV_PREV            "上一張 (PageUp)"
+    IDM_NAV_NEXT            "下一張 (PageDown、空白鍵)"
+    IDM_ZOOM_IN             "放大 (+)"
+    IDM_ZOOM_OUT            "縮小 (-)"
+    IDM_ZOOM_TOGGLE_FIT     "符合視窗 / 實際大小 (/)"
     IDM_ROTATE_LEFT         "向左旋轉 (Ctrl+[)"
     IDM_ROTATE_RIGHT        "向右旋轉 (Ctrl+])"
+    IDM_EDIT_RENAME         "改名 (F2)"
     IDM_EDIT_DELETE         "刪除 (Delete)"
     IDM_FILE_PROPERTIES     "圖片資訊 (Alt+Enter)"
+    IDM_VIEW_SLIDESHOW      "自動播放 (Ctrl+S)"
+    IDM_VIEW_FULLSCREEN     "全螢幕 (Ctrl+F)"
+    IDM_BAR_SORT            "排序方式"
+    IDM_BAR_VIEW            "檢視方式"
+    IDM_BAR_MORE            "更多選項 (Alt)"
 END

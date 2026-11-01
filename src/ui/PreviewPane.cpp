@@ -8,6 +8,7 @@
 #include "core/ImageDecoder.h"
 #include "core/ThreadPool.h"
 #include "ui/Messages.h"
+#include "ui/Theme.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -87,7 +88,7 @@ HRESULT PreviewPane::Create(HWND parent, HINSTANCE instance) {
         wc.lpszClassName = kClassName;
         if (!RegisterClassExW(&wc)) return HRESULT_FROM_WIN32(GetLastError());
     }
-    hwnd_ = CreateWindowExW(WS_EX_CLIENTEDGE, kClassName, nullptr, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0,
+    hwnd_ = CreateWindowExW(0, kClassName, nullptr, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0,
                             parent, nullptr, instance, this);
     if (!hwnd_) return HRESULT_FROM_WIN32(GetLastError());
     std::lock_guard<std::mutex> lock(shared_->mutex);
@@ -220,7 +221,7 @@ void PreviewPane::OnPaint() {
     HDC memory = CreateCompatibleDC(dc);
     HBITMAP canvas = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
     HGDIOBJ oldCanvas = SelectObject(memory, canvas);
-    FillRect(memory, &rc, GetSysColorBrush(COLOR_APPWORKSPACE));
+    FillRect(memory, &rc, theme::SurfaceBrush());
     {
         std::lock_guard<std::mutex> lock(shared_->mutex);
         if (shared_->bitmap && !path_.empty()) {
