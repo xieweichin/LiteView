@@ -246,7 +246,8 @@ HRESULT RenderPdfPage(const std::wstring& file, UINT page, UINT maxSide, ComPtr<
         // every Windows build accepts it: fall back to PNG on failure.
         ComPtr<IInspectable> output;
         for (int attempt = 0; attempt < 3; ++attempt) {
-            if (attempt < 2) options->put_BitmapEncoderId(attempt == 0 ? GUID_ContainerFormatBmp : GUID_ContainerFormatPng);
+            // BitmapEncoderId takes WinRT encoder ids, which are the WIC encoder CLSIDs.
+            if (attempt < 2) options->put_BitmapEncoderId(attempt == 0 ? CLSID_WICBmpEncoder : CLSID_WICPngEncoder);
             ComPtr<IInspectable> memory;
             hr = Activate(L"Windows.Storage.Streams.InMemoryRandomAccessStream", memory);
             if (FAILED(hr)) { g_lastStep = 11; return hr; }
