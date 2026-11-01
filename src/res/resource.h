@@ -9,5 +9,6 @@
 #define IDS_ABOUT_TEXT              1001
 #define IDS_STATUS_READY            1002
 #define IDS_NOT_IMPLEMENTED         1003
+#define IDS_ERR_STARTUP             1004
 
 // Toolbar tooltips use the command ID as the string ID.

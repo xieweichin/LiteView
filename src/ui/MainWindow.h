@@ -14,7 +14,8 @@ public:
     MainWindow(const MainWindow&) = delete;
     MainWindow& operator=(const MainWindow&) = delete;
 
-    bool Create(HINSTANCE instance, int showCommand);
+    // Registers the class and creates the window with its toolbar and status bar.
+    HRESULT Create(HINSTANCE instance, int showCommand);
     HWND Hwnd() const { return hwnd_; }
 
     // Call from the message loop before TranslateMessage/DispatchMessage.

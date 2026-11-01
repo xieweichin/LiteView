@@ -145,6 +145,7 @@ BEGIN
     IDS_ABOUT_TEXT          "LiteView 0.1.0\n輕巧快速的看圖程式。"
     IDS_STATUS_READY        "就緒"
     IDS_NOT_IMPLEMENTED     "這個功能還沒做好。"
+    IDS_ERR_STARTUP         "LiteView 無法啟動（錯誤碼 %s）。"
 
     // Toolbar tooltips (string ID = command ID)
     IDM_NAV_PARENT_FOLDER   "上層資料夾 (Backspace)"

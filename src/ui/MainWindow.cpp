@@ -24,7 +24,7 @@ bool FocusIsTextInput() {
 
 }  // namespace
 
-bool MainWindow::Create(HINSTANCE instance, int showCommand) {
+HRESULT MainWindow::Create(HINSTANCE instance, int showCommand) {
     instance_ = instance;
 
     WNDCLASSEXW wc = {sizeof(wc)};
@@ -39,7 +39,7 @@ bool MainWindow::Create(HINSTANCE instance, int showCommand) {
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     wc.lpszMenuName = MAKEINTRESOURCEW(IDR_MAINMENU);
     wc.lpszClassName = kClassName;
-    if (!RegisterClassExW(&wc)) return false;
+    if (!RegisterClassExW(&wc)) return HRESULT_FROM_WIN32(GetLastError());
 
     accelBrowser_ = LoadAcceleratorsW(instance, MAKEINTRESOURCEW(IDR_ACCEL_BROWSER));
     accelViewer_ = LoadAcceleratorsW(instance, MAKEINTRESOURCEW(IDR_ACCEL_VIEWER));
@@ -48,11 +48,15 @@ bool MainWindow::Create(HINSTANCE instance, int showCommand) {
     hwnd_ = CreateWindowExW(0, kClassName, title.c_str(), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                             CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
                             nullptr, nullptr, instance, this);
-    if (!hwnd_) return false;
+    if (!hwnd_) {
+        // WM_CREATE fails when a child control could not be created.
+        const DWORD err = GetLastError();
+        return err ? HRESULT_FROM_WIN32(err) : E_FAIL;
+    }
 
     ShowWindow(hwnd_, showCommand);
     UpdateWindow(hwnd_);
-    return true;
+    return S_OK;
 }
 
 bool MainWindow::TranslateAccelerator(MSG* msg) {
@@ -101,10 +105,12 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
-    case WM_NCDESTROY:
-        SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
+    case WM_NCDESTROY: {
+        HWND hwnd = hwnd_;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         hwnd_ = nullptr;
-        break;
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
     }
     return DefWindowProcW(hwnd_, msg, wParam, lParam);
 }
