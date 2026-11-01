@@ -34,6 +34,9 @@ UninstallDisplayName=LiteView
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+; 不放精靈圖片，讓安裝檔維持在 2 MB 以內。
+WizardImageFile=
+WizardSmallImageFile=
 ChangesAssociations=yes
 CloseApplications=yes
 
