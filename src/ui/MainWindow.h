@@ -2,7 +2,9 @@
 
 #include <windows.h>
 
+#include <memory>
 #include <string>
+#include <thread>
 
 // Top-level frame: menu, toolbar, status bar, and (from T4 on) the browser
 // and viewer panes. Owns the per-mode accelerator tables.
@@ -11,6 +13,7 @@ public:
     enum class Mode { Browser, Viewer };
 
     MainWindow() = default;
+    ~MainWindow();
     MainWindow(const MainWindow&) = delete;
     MainWindow& operator=(const MainWindow&) = delete;
 
@@ -30,6 +33,14 @@ private:
     void OnCommand(UINT id);
     LRESULT OnNotify(NMHDR* header);
     void OnDpiChanged(UINT dpi, const RECT* suggested);
+    HRESULT StartSettingsWorker() noexcept;
+    void OnSettingsReady(WPARAM token);
+    void ShowInitialWindow(int command);
+    void OnClose();
+    void OnSettingsSaved(WPARAM token);
+
+    struct SettingsState;
+    static void SettingsWorker(const std::shared_ptr<SettingsState>& state) noexcept;
 
     void CreateToolbar();
     void CreateStatusBar();
@@ -44,4 +55,9 @@ private:
     HACCEL accelViewer_ = nullptr;
     Mode mode_ = Mode::Browser;
     UINT dpi_ = USER_DEFAULT_SCREEN_DPI;
+    bool closing_ = false;
+    bool shown_ = false;
+    int showCommand_ = SW_SHOWNORMAL;
+    std::shared_ptr<SettingsState> settingsState_;
+    std::thread settingsThread_;
 };

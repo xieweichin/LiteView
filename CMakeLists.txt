@@ -36,10 +36,12 @@ else()
 endif()
 
 # ---- Core layer (no UI, unit tested) -----------------------------------------
-# Modules are added from T2 onward; INTERFACE until it has sources.
-add_library(LiteViewCore INTERFACE)
-target_include_directories(LiteViewCore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(LiteViewCore INTERFACE liteview_options)
+add_library(LiteViewCore STATIC
+    src/core/FolderModel.cpp
+    src/core/Settings.cpp
+    src/core/ThreadPool.cpp)
+target_include_directories(LiteViewCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(LiteViewCore PUBLIC liteview_options windowscodecs shlwapi shell32 ole32 uuid)
 
 # ---- Application ------------------------------------------------------------
 add_executable(LiteView WIN32
@@ -58,6 +60,8 @@ if(MSVC)
     target_link_options(LiteView PRIVATE /MANIFEST:NO)
 else()
     target_link_options(LiteView PRIVATE -municode)
+    # windres needs an explicit code page even when the .rc has a pragma.
+    set_source_files_properties(src/res/LiteView.rc PROPERTIES COMPILE_FLAGS "--codepage=65001")
 endif()
 
 # ---- Tests ------------------------------------------------------------------
