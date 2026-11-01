@@ -2,6 +2,7 @@
 
 #include "core/Metadata.h"
 #include "core/PdfRenderer.h"
+#include "core/VectorRenderer.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -51,6 +52,14 @@ HRESULT ImageDecoder::Decode(const std::wstring& path, UINT maxSide, DecodedImag
     out = {};
     if (path.empty()) return E_INVALIDARG;
     try {
+        if (IsVectorPath(path)) {
+            DecodedImage result;
+            const HRESULT hr = RenderVector(path, maxSide, result.bitmap, result.width, result.height,
+                                            result.originalWidth, result.originalHeight);
+            if (FAILED(hr)) return hr;
+            out = std::move(result);
+            return S_OK;
+        }
         if (IsPdfPath(path)) {
             std::wstring file;
             UINT page = 0;
