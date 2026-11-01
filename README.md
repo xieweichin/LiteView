@@ -17,3 +17,12 @@ ctest --test-dir build -C Release --output-on-failure
 ```
 
 執行檔在 `build\Release\LiteView.exe`。每次推送到 GitHub 後，Actions 也會建置並把執行檔上傳成 artifact。
+
+## 安裝
+
+到 [Releases](https://github.com/xieweichin/LiteView/releases) 下載：
+
+- `LiteView-<版本>-setup.exe`：安裝檔，只裝給目前使用者，不需要系統管理員權限。安裝時可勾選「設為圖片的開啟程式」（預設不勾）。
+- `LiteView-<版本>-portable.zip`：綠色版。解壓後在 `LiteView.exe` 旁放一個空的 `portable.ini`，設定與縮圖快取就存在同一個資料夾。
+
+安裝檔由 CI 用 Inno Setup 6（`installer/LiteView.iss`）產生；每次合併到 `main` 會更新對應版本的 Release。
