@@ -180,7 +180,11 @@ void FolderModel::Load(const std::shared_ptr<State>& state, std::wstring path,
                             FileKind kind = FileKind::Image;
                             const bool image = HasExtension(extensions, extension);
                             if (!image && IsTextExtension(extension)) kind = FileKind::Text;
-                            if (!image && _wcsicmp(extension, L".pdf") == 0) kind = FileKind::Pdf;
+                            if (!image && (_wcsicmp(extension, L".pdf") == 0 || _wcsicmp(extension, L".ai") == 0))
+                                kind = FileKind::Pdf;
+                            if (!image && (_wcsicmp(extension, L".svg") == 0 || _wcsicmp(extension, L".emf") == 0 ||
+                                           _wcsicmp(extension, L".wmf") == 0))
+                                kind = FileKind::Vector;
                             if (!image && IsDocumentExtension(extension)) kind = FileKind::Document;
                             if (!image && kind == FileKind::Image) {
                                 // A known format whose codec extension is not installed.

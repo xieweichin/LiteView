@@ -180,7 +180,9 @@ bool IsPdfPath(const std::wstring& path) noexcept {
     } catch (...) {
         return false;
     }
-    return _wcsicmp(PathFindExtensionW(file.c_str()), L".pdf") == 0;
+    // Illustrator files are normally saved "PDF compatible".
+    const wchar_t* extension = PathFindExtensionW(file.c_str());
+    return _wcsicmp(extension, L".pdf") == 0 || _wcsicmp(extension, L".ai") == 0;
 }
 
 HRESULT RenderPdfPage(const std::wstring& file, UINT page, UINT maxSide, ComPtr<IWICBitmapSource>& bitmap,

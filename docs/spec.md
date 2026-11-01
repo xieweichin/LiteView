@@ -90,6 +90,7 @@ Nov 1, 2026 · @偉欽
 - **文字檔**：txt、md、log、csv、json、xml、yaml、ini 與常見程式碼。瀏覽模式的預覽窗格顯示開頭幾行；按 Enter 進入檢視模式，用等寬字型唯讀顯示（自動換行，可選取複製，+/- 調整字級），編碼自動判斷 UTF-8／UTF-16／系統 ANSI（繁中 Windows 為 Big5），超過 8 MB 只顯示開頭。PageUp/PageDown/空白鍵在文字頁用來捲動，換檔用滑鼠或命令列按鈕。
 - **PDF**：由 Windows 內建的 Windows.Data.Pdf 繪製，不內嵌 PDF 引擎。縮圖、預覽窗格顯示第一頁；檢視模式可縮放，Ctrl+PageDown／Ctrl+PageUp 換頁，狀態列顯示「第 N / M 頁」。有密碼的 PDF 不支援。
 - **Office 文件**：Word、Excel、PowerPoint、OpenDocument、RTF、XPS 等。借用 Windows 的「預覽處理常式」（檔案總管預覽窗格同一套），有安裝 Office 或對應軟體才看得到；縮圖與預覽窗格用系統縮圖，檢視模式顯示完整文件。沒有預覽程式時顯示說明文字。啟動預覽程式可能要一兩秒。
+- **向量圖**：SVG 由 Direct2D 繪製（Windows 10 1703 以上），EMF／WMF 由 GDI+ 繪製，放大時重新繪製保持清晰；AI（PDF 相容格式）走 PDF 路線；EPS 走系統預覽處理常式，需另裝對應軟體。
 
 | 指標 | 目標 |
 | --- | --- |
