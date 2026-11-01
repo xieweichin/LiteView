@@ -6,6 +6,16 @@
 #define IDR_CONTEXTMENU             102
 #define IDD_PROPERTIES              110
 #define IDC_PROPERTIES_LIST         1001
+#ifndef IDC_STATIC
+#define IDC_STATIC                  (-1)
+#endif
+#define IDD_BATCH_RENAME            111
+#define IDC_BR_PATTERN              1010
+#define IDC_BR_START                1011
+#define IDC_BR_LOWER_EXT            1012
+#define IDC_BR_LIST                 1013
+#define IDC_BR_STATUS               1014
+#define IDC_BR_PROGRESS             1015
 
 // ---- String table -----------------------------------------------------------
 #define IDS_APP_TITLE               1000
@@ -56,5 +66,19 @@
 #define IDS_PROP_ISO                1321
 #define IDS_PROP_FOCAL              1322
 #define IDS_PROP_TITLE              1323
+
+// Batch rename (T8)
+#define IDS_BR_COL_FROM             1400
+#define IDS_BR_COL_TO               1401
+#define IDS_BR_COL_ISSUE            1402
+#define IDS_BR_ISSUE_DUPLICATE      1403
+#define IDS_BR_ISSUE_INVALID        1404
+#define IDS_BR_ISSUE_TOO_LONG       1405
+#define IDS_BR_ISSUE_EXISTS         1406
+#define IDS_BR_CONFLICTS            1407
+#define IDS_BR_READY                1408
+#define IDS_ERR_BATCH_RENAME        1409
+#define IDS_ERR_UNDO_RENAME         1410
+#define IDS_BR_NOTHING_TO_UNDO      1411
 
 // Toolbar tooltips use the command ID as the string ID.

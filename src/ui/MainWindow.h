@@ -114,6 +114,11 @@ private:
     void AfterRemovingViewed(int index);
     void ShowError(UINT id, const std::wstring& detail);
 
+    // Batch rename (T8)
+    std::wstring UndoFilePath();  // rename-undo.txt next to the settings file
+    void BatchRenameSelection();
+    void UndoBatchRename();
+
     // Layout and splitters
     void Layout();
     Splitter HitTestSplitter(POINT client) const;
@@ -143,6 +148,7 @@ private:
     bool browserStarted_ = false;
     int showCommand_ = SW_SHOWNORMAL;
     std::shared_ptr<SettingsState> settingsState_;
+    std::wstring undoFile_;
     std::thread settingsThread_;
 
     // Browser state

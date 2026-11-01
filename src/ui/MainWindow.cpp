@@ -15,12 +15,14 @@
 #include <mutex>
 #include <new>
 
+#include "core/BatchRename.h"
 #include "core/FileOps.h"
 #include "core/Rotator.h"
 #include "core/Settings.h"
 #include "core/ThreadPool.h"
 #include "res/resource.h"
 #include "ui/Commands.h"
+#include "ui/BatchRenameDialog.h"
 #include "ui/Messages.h"
 #include "ui/PropertiesDialog.h"
 
@@ -694,6 +696,12 @@ void MainWindow::OnCommand(UINT id) {
     case IDM_EDIT_RENAME:
         RenameSelection();
         break;
+    case IDM_EDIT_BATCH_RENAME:
+        BatchRenameSelection();
+        break;
+    case IDM_EDIT_UNDO_BATCH_RENAME:
+        UndoBatchRename();
+        break;
     case IDM_ROTATE_LEFT:
         RotateSelection(false);
         break;
@@ -801,6 +809,9 @@ void MainWindow::OnInitMenuPopup(HMENU menu) {
     EnableMenuItem(menu, IDM_NAV_PARENT_FOLDER, MF_BYCOMMAND | browserOnly);
     EnableMenuItem(menu, IDM_VIEW_REFRESH, MF_BYCOMMAND | browserOnly);
     EnableMenuItem(menu, IDM_EDIT_SELECT_ALL, MF_BYCOMMAND | browserOnly);
+    EnableMenuItem(menu, IDM_EDIT_BATCH_RENAME, MF_BYCOMMAND | browserOnly);
+    const bool canUndo = mode_ == Mode::Browser && BatchRename::CanUndo(UndoFilePath());
+    EnableMenuItem(menu, IDM_EDIT_UNDO_BATCH_RENAME, MF_BYCOMMAND | (canUndo ? MF_ENABLED : MF_GRAYED));
 }
 
 void MainWindow::OnDpiChanged(UINT dpi, const RECT* suggested) {
@@ -1536,6 +1547,52 @@ void MainWindow::DeleteSelection() {
         selectIndexAfterLoad_ = first;
         Refresh();
     }
+}
+
+std::wstring MainWindow::UndoFilePath() {
+    if (undoFile_.empty()) {
+        Settings settings;
+        if (SUCCEEDED(Settings::ForCurrentProcess(settings))) {
+            const std::wstring& ini = settings.FilePath();
+            const auto slash = ini.find_last_of(L"\\/");
+            if (slash != std::wstring::npos) undoFile_ = ini.substr(0, slash + 1) + L"rename-undo.txt";
+        }
+    }
+    return undoFile_;
+}
+
+void MainWindow::BatchRenameSelection() {
+    if (mode_ != Mode::Browser) return;
+    StopSlideshow();
+    std::vector<int> indices = list_->SelectedIndices();  // ascending = list order
+    if (indices.size() <= 1) {
+        // One file or none: rename the whole folder.
+        indices.clear();
+        for (std::size_t i = 0; i < model_->Count(); ++i) indices.push_back(static_cast<int>(i));
+    }
+    if (indices.empty()) return;
+    std::vector<std::wstring> paths;
+    paths.reserve(indices.size());
+    for (int index : indices) paths.push_back(model_->FullPath(static_cast<std::size_t>(index)));
+    const HRESULT hr = ShowBatchRenameDialog(hwnd_, instance_, paths, UndoFilePath());
+    if (hr == S_FALSE) return;
+    if (FAILED(hr)) ShowError(IDS_ERR_BATCH_RENAME, HexResult(hr));
+    selectIndexAfterLoad_ = indices.front();
+    Refresh();
+}
+
+void MainWindow::UndoBatchRename() {
+    if (mode_ != Mode::Browser) return;
+    const std::wstring undo = UndoFilePath();
+    if (!BatchRename::CanUndo(undo)) {
+        MessageBoxW(hwnd_, LoadStr(IDS_BR_NOTHING_TO_UNDO).c_str(), LoadStr(IDS_APP_TITLE).c_str(), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    HCURSOR old = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+    const HRESULT hr = BatchRename::UndoLast(undo);
+    SetCursor(old);
+    if (FAILED(hr)) ShowError(IDS_ERR_UNDO_RENAME, HexResult(hr));
+    Refresh();
 }
 
 void MainWindow::RenameSelection() {
