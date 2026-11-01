@@ -146,6 +146,8 @@ BEGIN
     IDS_STATUS_READY        "就緒"
     IDS_NOT_IMPLEMENTED     "這個功能還沒做好。"
     IDS_ERR_STARTUP         "LiteView 無法啟動（錯誤碼 %s）。"
+    IDS_ERR_SETTINGS_READ   "無法讀取視窗設定，將使用預設位置。"
+    IDS_ERR_SETTINGS_WRITE  "無法儲存視窗位置，請檢查設定資料夾是否可寫入。"
 
     // Toolbar tooltips (string ID = command ID)
     IDM_NAV_PARENT_FOLDER   "上層資料夾 (Backspace)"

@@ -3,6 +3,13 @@
 #include <commctrl.h>
 #include <windowsx.h>
 
+#include <climits>
+#include <condition_variable>
+#include <cstdint>
+#include <mutex>
+#include <new>
+
+#include "core/Settings.h"
 #include "res/resource.h"
 #include "ui/Commands.h"
 
@@ -11,6 +18,8 @@ namespace {
 constexpr wchar_t kClassName[] = L"LiteViewMainWindow";
 constexpr int kMinWidth = 480;   // in 96-DPI pixels
 constexpr int kMinHeight = 320;
+constexpr UINT kSettingsReady = WM_APP + 1;
+constexpr UINT kSettingsSaved = WM_APP + 2;
 
 int Scale(int value, UINT dpi) { return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI); }
 
@@ -23,6 +32,32 @@ bool FocusIsTextInput() {
 }
 
 }  // namespace
+
+struct MainWindow::SettingsState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    HWND hwnd = nullptr;
+    bool stop = false;
+    bool closeRequested = false;
+    bool saveRequested = false;
+    bool canRestore = false;
+    RECT normal{};
+    bool maximized = false;
+    HRESULT readResult = S_OK;
+    HRESULT writeResult = S_OK;
+};
+
+MainWindow::~MainWindow() {
+    if (settingsState_) {
+        {
+            std::lock_guard<std::mutex> lock(settingsState_->mutex);
+            settingsState_->stop = true;
+            settingsState_->hwnd = nullptr;
+        }
+        settingsState_->changed.notify_one();
+    }
+    if (settingsThread_.joinable()) settingsThread_.join();
+}
 
 HRESULT MainWindow::Create(HINSTANCE instance, int showCommand) {
     instance_ = instance;
@@ -52,6 +87,12 @@ HRESULT MainWindow::Create(HINSTANCE instance, int showCommand) {
         // WM_CREATE fails when a child control could not be created.
         const DWORD err = GetLastError();
         return err ? HRESULT_FROM_WIN32(err) : E_FAIL;
+    }
+
+    const HRESULT settingsResult = StartSettingsWorker();
+    if (FAILED(settingsResult)) {
+        DestroyWindow(hwnd_);
+        return settingsResult;
     }
 
     ShowWindow(hwnd_, showCommand);
@@ -102,7 +143,31 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_DPICHANGED:
         OnDpiChanged(HIWORD(wParam), reinterpret_cast<const RECT*>(lParam));
         return 0;
+    case WM_ENTERSIZEMOVE:
+        placementTouched_ = true;
+        break;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xFFF0) == SC_MAXIMIZE || (wParam & 0xFFF0) == SC_RESTORE ||
+            (wParam & 0xFFF0) == SC_MINIMIZE) placementTouched_ = true;
+        break;
+    case WM_CLOSE:
+        OnClose();
+        return 0;
+    case kSettingsReady:
+        OnSettingsReady(wParam);
+        return 0;
+    case kSettingsSaved:
+        OnSettingsSaved(wParam);
+        return 0;
     case WM_DESTROY:
+        if (settingsState_) {
+            {
+                std::lock_guard<std::mutex> lock(settingsState_->mutex);
+                settingsState_->stop = true;
+                settingsState_->hwnd = nullptr;
+            }
+            settingsState_->changed.notify_one();
+        }
         PostQuitMessage(0);
         return 0;
     case WM_NCDESTROY: {
@@ -183,7 +248,7 @@ void MainWindow::OnSize() {
 void MainWindow::OnCommand(UINT id) {
     switch (id) {
     case IDM_FILE_EXIT:
-        DestroyWindow(hwnd_);
+        PostMessageW(hwnd_, WM_CLOSE, 0, 0);
         break;
     case IDM_HELP_ABOUT: {
         const std::wstring text = LoadStr(IDS_ABOUT_TEXT);
@@ -218,4 +283,142 @@ std::wstring MainWindow::LoadStr(UINT id) const {
     const wchar_t* text = nullptr;
     const int len = LoadStringW(instance_, id, reinterpret_cast<LPWSTR>(&text), 0);
     return (len > 0 && text) ? std::wstring(text, static_cast<size_t>(len)) : std::wstring();
+}
+
+HRESULT MainWindow::StartSettingsWorker() noexcept {
+    try {
+        settingsState_ = std::make_shared<SettingsState>();
+        settingsState_->hwnd = hwnd_;
+        settingsThread_ = std::thread(&MainWindow::SettingsWorker, settingsState_);
+        return S_OK;
+    } catch (const std::bad_alloc&) {
+        settingsState_.reset();
+        return E_OUTOFMEMORY;
+    } catch (...) {
+        settingsState_.reset();
+        return E_FAIL;
+    }
+}
+
+void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noexcept {
+    Settings settings;
+    const HRESULT initResult = Settings::ForCurrentProcess(settings);
+    HRESULT readResult = initResult;
+    RECT initial{};
+    bool maximized = false;
+    bool canRestore = false;
+    if (SUCCEEDED(readResult)) {
+        int left = INT_MIN, top = INT_MIN, right = INT_MIN, bottom = INT_MIN;
+        readResult = settings.ReadInt(L"Window", L"Left", INT_MIN, left);
+        if (SUCCEEDED(readResult)) readResult = settings.ReadInt(L"Window", L"Top", INT_MIN, top);
+        if (SUCCEEDED(readResult)) readResult = settings.ReadInt(L"Window", L"Right", INT_MIN, right);
+        if (SUCCEEDED(readResult)) readResult = settings.ReadInt(L"Window", L"Bottom", INT_MIN, bottom);
+        if (SUCCEEDED(readResult)) readResult = settings.ReadBool(L"Window", L"Maximized", false, maximized);
+        const std::int64_t width = static_cast<std::int64_t>(right) - left;
+        const std::int64_t height = static_cast<std::int64_t>(bottom) - top;
+        canRestore = SUCCEEDED(readResult) && left != INT_MIN && top != INT_MIN &&
+                     right != INT_MIN && bottom != INT_MIN && width >= kMinWidth &&
+                     height >= kMinHeight && width <= 100000 && height <= 100000;
+        initial = RECT{left, top, right, bottom};
+    }
+
+    RECT final{};
+    bool finalMaximized = false;
+    bool save = false;
+    {
+        std::unique_lock<std::mutex> lock(state->mutex);
+        state->readResult = readResult;
+        // The user may have closed the window while settings were loading.
+        // In that case OnClose has already recorded the final placement.
+        if (!state->closeRequested) {
+            state->normal = initial;
+            state->maximized = maximized;
+            state->canRestore = canRestore;
+        }
+        if (!state->stop && !state->closeRequested && state->hwnd) {
+            PostMessageW(state->hwnd, kSettingsReady, reinterpret_cast<WPARAM>(state.get()), 0);
+        }
+        state->changed.wait(lock, [&] { return state->stop || state->closeRequested; });
+        save = !state->stop && state->saveRequested;
+        final = state->normal;
+        finalMaximized = state->maximized;
+    }
+
+    // A malformed saved value should not prevent writing a corrected one.
+    HRESULT writeResult = initResult;
+    if (save && SUCCEEDED(writeResult)) {
+        writeResult = settings.WriteInt(L"Window", L"Left", final.left);
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Window", L"Top", final.top);
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Window", L"Right", final.right);
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Window", L"Bottom", final.bottom);
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteBool(L"Window", L"Maximized", finalMaximized);
+    }
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->writeResult = writeResult;
+        if (!state->stop && state->closeRequested && state->hwnd) {
+            PostMessageW(state->hwnd, kSettingsSaved, reinterpret_cast<WPARAM>(state.get()), 0);
+        }
+    }
+}
+
+void MainWindow::OnSettingsReady(WPARAM token) {
+    if (!settingsState_ || token != reinterpret_cast<WPARAM>(settingsState_.get()) || closing_) return;
+    RECT rect{};
+    bool maximized = false;
+    bool canRestore = false;
+    HRESULT hr = S_OK;
+    {
+        std::lock_guard<std::mutex> lock(settingsState_->mutex);
+        rect = settingsState_->normal;
+        maximized = settingsState_->maximized;
+        canRestore = settingsState_->canRestore;
+        hr = settingsState_->readResult;
+    }
+    if (FAILED(hr)) {
+        MessageBoxW(hwnd_, LoadStr(IDS_ERR_SETTINGS_READ).c_str(), LoadStr(IDS_APP_TITLE).c_str(),
+                    MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (!canRestore || placementTouched_ || !MonitorFromRect(&rect, MONITOR_DEFAULTTONULL)) return;
+    WINDOWPLACEMENT placement{sizeof(placement)};
+    if (!GetWindowPlacement(hwnd_, &placement)) return;
+    placement.rcNormalPosition = rect;
+    if (placement.showCmd != SW_SHOWMINIMIZED && placement.showCmd != SW_MINIMIZE) {
+        placement.showCmd = maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+    }
+    SetWindowPlacement(hwnd_, &placement);
+}
+
+void MainWindow::OnClose() {
+    if (closing_) return;
+    closing_ = true;
+    WINDOWPLACEMENT placement{sizeof(placement)};
+    if (!settingsState_ || !GetWindowPlacement(hwnd_, &placement)) {
+        DestroyWindow(hwnd_);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(settingsState_->mutex);
+        settingsState_->normal = placement.rcNormalPosition;
+        settingsState_->maximized = placement.showCmd == SW_SHOWMAXIMIZED ||
+            (placement.showCmd == SW_SHOWMINIMIZED && (placement.flags & WPF_RESTORETOMAXIMIZED));
+        settingsState_->saveRequested = true;
+        settingsState_->closeRequested = true;
+    }
+    settingsState_->changed.notify_one();
+}
+
+void MainWindow::OnSettingsSaved(WPARAM token) {
+    if (!settingsState_ || token != reinterpret_cast<WPARAM>(settingsState_.get())) return;
+    HRESULT hr;
+    {
+        std::lock_guard<std::mutex> lock(settingsState_->mutex);
+        hr = settingsState_->writeResult;
+    }
+    if (FAILED(hr)) {
+        MessageBoxW(hwnd_, LoadStr(IDS_ERR_SETTINGS_WRITE).c_str(), LoadStr(IDS_APP_TITLE).c_str(),
+                    MB_OK | MB_ICONWARNING);
+    }
+    DestroyWindow(hwnd_);
 }
