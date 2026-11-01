@@ -190,6 +190,9 @@ private:
     // Viewer state
     std::uint32_t viewerItemId_ = 0;
     std::wstring viewerPath_;
+    std::wstring viewerKey_;   // what the viewer cache decodes: viewerPath_, or "<pdf>|<page>"
+    UINT viewerPage_ = 0;      // PDF page shown, from 0
+    void StepPdfPage(int step);  // PDF: previous / next page
     int viewerDirection_ = 1;
     bool openViewerOnLoad_ = false;
     bool fullscreen_ = false;

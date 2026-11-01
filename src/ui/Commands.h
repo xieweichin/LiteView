@@ -41,6 +41,8 @@
 #define IDM_NAV_PREV                40305 // PageUp、Backspace、滾輪向上
 #define IDM_NAV_FIRST               40306 // Home
 #define IDM_NAV_LAST                40307 // End
+#define IDM_PAGE_NEXT               40308 // Ctrl+PageDown（PDF 下一頁）
+#define IDM_PAGE_PREV               40309 // Ctrl+PageUp（PDF 上一頁）
 
 // ---- Viewer -----------------------------------------------------------------
 #define IDM_ZOOM_IN                 40401 // +、Ctrl+滾輪

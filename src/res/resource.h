@@ -100,3 +100,6 @@
 // Text files
 #define IDS_TEXT_ERROR              1700
 #define IDS_TEXT_TRUNCATED          1701
+
+// PDF
+#define IDS_PDF_PAGE                1800

@@ -4,6 +4,7 @@ add_executable(LiteViewTests
     test_folder_model.cpp
     test_format_support.cpp
     test_text_document.cpp
+    test_pdf_renderer.cpp
     test_image_decoder.cpp
     test_settings.cpp
     test_thread_pool.cpp
