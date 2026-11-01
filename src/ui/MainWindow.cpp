@@ -25,6 +25,7 @@
 #include "ui/BatchRenameDialog.h"
 #include "ui/Messages.h"
 #include "ui/PropertiesDialog.h"
+#include "ui/Theme.h"
 
 namespace {
 
@@ -40,10 +41,61 @@ constexpr UINT kIdList = 11;
 constexpr UINT kIdPathBar = 12;
 constexpr int kSplitter = 5;        // 96-DPI pixels
 constexpr int kMinPane = 80;        // 96-DPI pixels
-constexpr int kGap = 3;             // 96-DPI pixels
+constexpr int kGap = 6;             // 96-DPI pixels
+constexpr int kFieldHeight = 32;    // 96-DPI pixels, path field
+constexpr int kFieldPad = 10;       // 96-DPI pixels, text inset in the path field
+constexpr int kRadius = 8;          // 96-DPI pixels, RoundRect ellipse (4 px corners)
+constexpr int kStatusPad = 12;      // 96-DPI pixels
+
+// Segoe Fluent Icons / Segoe MDL2 Assets code points.
+constexpr wchar_t kGlyphUp = 0xE74A;
+constexpr wchar_t kGlyphRefresh = 0xE72C;
+constexpr wchar_t kGlyphPhoto = 0xE91B;
+constexpr wchar_t kGlyphBack = 0xE72B;
+constexpr wchar_t kGlyphPrev = 0xE76B;
+constexpr wchar_t kGlyphNext = 0xE76C;
+constexpr wchar_t kGlyphZoomOut = 0xE71F;
+constexpr wchar_t kGlyphZoomIn = 0xE8A3;
+constexpr wchar_t kGlyphFit = 0xE9A6;
+constexpr wchar_t kGlyphRotateLeft = 0xE80D;
+constexpr wchar_t kGlyphRotateRight = 0xE80C;
+constexpr wchar_t kGlyphRename = 0xE8AC;
+constexpr wchar_t kGlyphDelete = 0xE74D;
+constexpr wchar_t kGlyphInfo = 0xE946;
+constexpr wchar_t kGlyphSort = 0xE8CB;
+constexpr wchar_t kGlyphView = 0xE8A9;
+constexpr wchar_t kGlyphMore = 0xE712;
+constexpr wchar_t kGlyphSlideshow = 0xE786;
+constexpr wchar_t kGlyphFullscreen = 0xE740;
 constexpr UINT kSettingsWaitMs = 200;
 
 int Scale(int value, UINT dpi) { return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI); }
+
+// The submenu of `root` (at any depth) that directly holds `command`.
+HMENU FindSubMenu(HMENU root, UINT command) {
+    const int count = GetMenuItemCount(root);
+    for (int i = 0; i < count; ++i) {
+        HMENU sub = GetSubMenu(root, i);
+        if (!sub) continue;
+        const int subCount = GetMenuItemCount(sub);
+        for (int j = 0; j < subCount; ++j) {
+            if (GetMenuItemID(sub, j) == command) return sub;
+        }
+        if (HMENU deeper = FindSubMenu(sub, command)) return deeper;
+    }
+    return nullptr;
+}
+
+// The "&X" mnemonic of a menu item, upper-cased, or 0.
+wchar_t Mnemonic(const std::wstring& text) {
+    for (std::size_t i = 0; i + 1 < text.size(); ++i) {
+        if (text[i] != L'&') continue;
+        if (text[i + 1] == L'&') { ++i; continue; }
+        return static_cast<wchar_t>(reinterpret_cast<UINT_PTR>(CharUpperW(
+            reinterpret_cast<LPWSTR>(static_cast<UINT_PTR>(text[i + 1])))));
+    }
+    return 0;
+}
 
 bool FocusIsTextInput() {
     HWND focus = GetFocus();
@@ -204,8 +256,8 @@ HRESULT MainWindow::Create(HINSTANCE instance, int showCommand, const std::wstri
                                                GetSystemMetrics(SM_CXSMICON),
                                                GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);  // splitter gaps
-    wc.lpszMenuName = MAKEINTRESOURCEW(IDR_MAINMENU);
+    wc.hbrBackground = nullptr;  // painted in OnPaint with the theme colours
+    wc.lpszMenuName = nullptr;   // the menu opens from the command bar
     wc.lpszClassName = kClassName;
     if (!RegisterClassExW(&wc)) return HRESULT_FROM_WIN32(GetLastError());
 
@@ -266,8 +318,31 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         OnSize();
         return 0;
     case WM_COMMAND:
+        if (reinterpret_cast<HWND>(lParam) == pathBar_ && pathBar_ &&
+            (HIWORD(wParam) == EN_SETFOCUS || HIWORD(wParam) == EN_KILLFOCUS)) {
+            InvalidateRect(hwnd_, &fieldRect_, FALSE);  // focus underline
+        }
         OnCommand(LOWORD(wParam));
         return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+        OnPaint();
+        return 0;
+    case WM_CTLCOLOREDIT: {
+        LRESULT brush = 0;
+        if (theme::HandleCtlColor(msg, wParam, lParam, brush)) return brush;
+        break;
+    }
+    case WM_SYSCOMMAND:
+        // Alt, F10 and Alt+letter open the menu that used to be the menu bar.
+        if ((wParam & 0xFFF0) == SC_KEYMENU && OnKeyMenu(static_cast<wchar_t>(lParam))) return 0;
+        break;
+    case WM_SETTINGCHANGE:
+    case WM_SYSCOLORCHANGE:
+    case WM_THEMECHANGED:
+        if (theme::IsThemeChangeMessage(msg, lParam)) OnThemeChanged();
+        break;
     case WM_NOTIFY:
         return OnNotify(reinterpret_cast<NMHDR*>(lParam));
     case WM_GETMINMAXINFO: {
@@ -363,6 +438,9 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         dragging_ = Splitter::None;
         return 0;
     case WM_DESTROY:
+        if (moreMenu_) DestroyMenu(moreMenu_);
+        if (viewMenu_) DestroyMenu(viewMenu_);
+        moreMenu_ = viewMenu_ = sortMenu_ = nullptr;
         if (font_) {
             DeleteObject(font_);
             font_ = nullptr;
@@ -393,10 +471,17 @@ bool MainWindow::OnCreate() {
     if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi_)) {
         font_ = CreateFontIndirectW(&metrics.lfMessageFont);
     }
-    CreateToolbar();
+    theme::ApplyFrame(hwnd_);
+    if (FAILED(navBar_.Create(hwnd_, instance_)) || FAILED(commandBar_.Create(hwnd_, instance_))) return false;
+    navBar_.SetDpi(dpi_, font_);
+    commandBar_.SetDpi(dpi_, font_);
+    navBar_.SetItems({
+        {CommandBar::Kind::Button, IDM_NAV_PARENT_FOLDER, kGlyphUp, 0},
+        {CommandBar::Kind::Button, IDM_VIEW_REFRESH, kGlyphRefresh, 0},
+    });
     CreatePathBar();
-    CreateStatusBar();
-    if (!toolbar_ || !status_ || !pathBar_) return false;
+    if (!pathBar_) return false;
+    statusText_[0] = LoadStr(IDS_STATUS_READY);
     if (FAILED(tree_.Create(hwnd_, instance_, kIdTree, hwnd_))) return false;
     if (FAILED(preview_.Create(hwnd_, instance_))) return false;
     if (FAILED(list_->Create(hwnd_, instance_, kIdList))) return false;
@@ -420,7 +505,8 @@ bool MainWindow::OnCreate() {
     };
     callbacks.viewChanged = [this] { UpdateViewerStatus(); };
     if (FAILED(viewer_.Create(hwnd_, instance_, std::move(callbacks)))) return false;
-    menu_ = GetMenu(hwnd_);
+    CreateMenus();
+    SetBarItems();
     list_->SetRenameCallback([this](int index, const std::wstring& name) { return RenameItem(index, name); });
     rotateState_ = std::make_shared<RotateState>();
     rotateState_->hwnd = hwnd_;
@@ -434,7 +520,7 @@ bool MainWindow::OnCreate() {
 }
 
 void MainWindow::CreatePathBar() {
-    pathBar_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, nullptr,
+    pathBar_ = CreateWindowExW(0, WC_EDITW, nullptr,
                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_,
                                reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdPathBar)), instance_, nullptr);
     if (!pathBar_) return;
@@ -470,98 +556,256 @@ LRESULT CALLBACK MainWindow::PathBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
-void MainWindow::CreateToolbar() {
-    toolbar_ = CreateWindowExW(0, TOOLBARCLASSNAMEW, nullptr,
-                               WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | CCS_TOP,
-                               0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
-    if (!toolbar_) return;
-    SendMessageW(toolbar_, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
-    SendMessageW(toolbar_, TB_SETEXTENDEDSTYLE, 0, TBSTYLE_EX_DOUBLEBUFFER);
-
-    // Placeholder system images until LiteView gets its own toolbar bitmap.
-    const auto stdBase = static_cast<int>(
-        SendMessageW(toolbar_, TB_LOADIMAGES, IDB_STD_SMALL_COLOR, reinterpret_cast<LPARAM>(HINST_COMMCTRL)));
-    const auto viewBase = static_cast<int>(
-        SendMessageW(toolbar_, TB_LOADIMAGES, IDB_VIEW_SMALL_COLOR, reinterpret_cast<LPARAM>(HINST_COMMCTRL)));
-
-    const TBBUTTON buttons[] = {
-        {viewBase + VIEW_PARENTFOLDER, IDM_NAV_PARENT_FOLDER, TBSTATE_ENABLED, BTNS_BUTTON, {}, 0, 0},
-        {0, 0, 0, BTNS_SEP, {}, 0, 0},
-        {viewBase + VIEW_LARGEICONS, IDM_NAV_TOGGLE_MODE, TBSTATE_ENABLED, BTNS_BUTTON, {}, 0, 0},
-        {0, 0, 0, BTNS_SEP, {}, 0, 0},
-        {stdBase + STD_UNDO, IDM_ROTATE_LEFT, TBSTATE_ENABLED, BTNS_BUTTON, {}, 0, 0},
-        {stdBase + STD_REDOW, IDM_ROTATE_RIGHT, TBSTATE_ENABLED, BTNS_BUTTON, {}, 0, 0},
-        {0, 0, 0, BTNS_SEP, {}, 0, 0},
-        {stdBase + STD_DELETE, IDM_EDIT_DELETE, TBSTATE_ENABLED, BTNS_BUTTON, {}, 0, 0},
-        {stdBase + STD_PROPERTIES, IDM_FILE_PROPERTIES, TBSTATE_ENABLED, BTNS_BUTTON, {}, 0, 0},
-    };
-    SendMessageW(toolbar_, TB_ADDBUTTONSW, ARRAYSIZE(buttons), reinterpret_cast<LPARAM>(buttons));
-    SendMessageW(toolbar_, TB_AUTOSIZE, 0, 0);
+void MainWindow::CreateMenus() {
+    // The old menu bar becomes one popup: "File", "Edit", ... as submenus,
+    // so their Alt+letter mnemonics keep working.
+    HMENU bar = LoadMenuW(instance_, MAKEINTRESOURCEW(IDR_MAINMENU));
+    moreMenu_ = CreatePopupMenu();
+    if (!bar || !moreMenu_) {
+        if (bar) DestroyMenu(bar);
+        return;
+    }
+    while (GetMenuItemCount(bar) > 0) {
+        wchar_t text[64] = {};
+        GetMenuStringW(bar, 0, text, ARRAYSIZE(text), MF_BYPOSITION);
+        HMENU sub = GetSubMenu(bar, 0);
+        RemoveMenu(bar, 0, MF_BYPOSITION);
+        if (sub) AppendMenuW(moreMenu_, MF_POPUP | MF_STRING, reinterpret_cast<UINT_PTR>(sub), text);
+    }
+    DestroyMenu(bar);
+    sortMenu_ = FindSubMenu(moreMenu_, IDM_SORT_NAME);
+    viewMenu_ = CreatePopupMenu();
+    if (viewMenu_) {
+        for (UINT id = IDM_VIEW_THUMBNAILS; id <= IDM_VIEW_DETAILS; ++id) {
+            wchar_t text[64] = {};
+            GetMenuStringW(moreMenu_, id, text, ARRAYSIZE(text), MF_BYCOMMAND);
+            AppendMenuW(viewMenu_, MF_STRING, id, text);
+        }
+    }
 }
 
-void MainWindow::CreateStatusBar() {
-    status_ = CreateWindowExW(0, STATUSCLASSNAMEW, nullptr, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
-                              0, 0, 0, 0, hwnd_, nullptr, instance_, nullptr);
-    if (!status_) return;
-    UpdateStatusParts();
-    const std::wstring ready = LoadStr(IDS_STATUS_READY);
-    SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(ready.c_str()));
+void MainWindow::SetBarItems() {
+    using Kind = CommandBar::Kind;
+    const CommandBar::Item separator{Kind::Separator, 0, 0, 0};
+    if (mode_ == Mode::Viewer) {
+        commandBar_.SetItems({
+            {Kind::Button, IDM_NAV_EXIT_VIEWER, kGlyphBack, IDS_BAR_BROWSE},
+            separator,
+            {Kind::Button, IDM_NAV_PREV, kGlyphPrev, 0},
+            {Kind::Button, IDM_NAV_NEXT, kGlyphNext, 0},
+            separator,
+            {Kind::Button, IDM_ZOOM_OUT, kGlyphZoomOut, 0},
+            {Kind::Button, IDM_ZOOM_IN, kGlyphZoomIn, 0},
+            {Kind::Button, IDM_ZOOM_TOGGLE_FIT, kGlyphFit, 0},
+            separator,
+            {Kind::Button, IDM_ROTATE_LEFT, kGlyphRotateLeft, 0},
+            {Kind::Button, IDM_ROTATE_RIGHT, kGlyphRotateRight, 0},
+            separator,
+            {Kind::Button, IDM_EDIT_RENAME, kGlyphRename, 0},
+            {Kind::Button, IDM_EDIT_DELETE, kGlyphDelete, 0},
+            {Kind::Button, IDM_FILE_PROPERTIES, kGlyphInfo, 0},
+            {Kind::Spacer, 0, 0, 0},
+            {Kind::Button, IDM_VIEW_SLIDESHOW, kGlyphSlideshow, 0},
+            {Kind::Button, IDM_VIEW_FULLSCREEN, kGlyphFullscreen, 0},
+            {Kind::Button, IDM_BAR_MORE, kGlyphMore, 0},
+        });
+        commandBar_.SetChecked(IDM_VIEW_SLIDESHOW, slideshow_);
+    } else {
+        commandBar_.SetItems({
+            {Kind::Button, IDM_NAV_TOGGLE_MODE, kGlyphPhoto, IDS_BAR_VIEW_PICTURE},
+            separator,
+            {Kind::Button, IDM_ROTATE_LEFT, kGlyphRotateLeft, 0},
+            {Kind::Button, IDM_ROTATE_RIGHT, kGlyphRotateRight, 0},
+            separator,
+            {Kind::Button, IDM_EDIT_RENAME, kGlyphRename, 0},
+            {Kind::Button, IDM_EDIT_DELETE, kGlyphDelete, 0},
+            {Kind::Button, IDM_FILE_PROPERTIES, kGlyphInfo, 0},
+            {Kind::Spacer, 0, 0, 0},
+            {Kind::DropDown, IDM_BAR_SORT, kGlyphSort, IDS_BAR_SORT},
+            {Kind::DropDown, IDM_BAR_VIEW, kGlyphView, IDS_BAR_VIEW},
+            {Kind::Button, IDM_BAR_MORE, kGlyphMore, 0},
+        });
+    }
 }
 
-void MainWindow::UpdateStatusParts() {
-    if (!status_) return;
+void MainWindow::ShowBarMenu(UINT command, bool fromKeyboard) {
+    HMENU menu = command == IDM_BAR_SORT ? sortMenu_ : command == IDM_BAR_VIEW ? viewMenu_ : moreMenu_;
+    if (!menu) return;
+    RECT rc{};
+    if (!commandBar_.ItemScreenRect(command, &rc)) {
+        GetWindowRect(commandBar_.Hwnd(), &rc);
+        rc.left = rc.right;
+    }
+    TPMPARAMS params = {sizeof(params), rc};
+    const bool right = command == IDM_BAR_MORE;
+    if (fromKeyboard) PostMessageW(hwnd_, WM_KEYDOWN, VK_DOWN, 0);  // highlight the first item
+    TrackPopupMenuEx(menu, TPM_LEFTBUTTON | TPM_VERTICAL | (right ? TPM_RIGHTALIGN : TPM_LEFTALIGN),
+                     right ? rc.right : rc.left, rc.bottom, hwnd_, &params);
+}
+
+bool MainWindow::OnKeyMenu(wchar_t key) {
+    if (fullscreen_ || !moreMenu_) return false;  // no command bar to anchor to
+    if (key == 0) {  // Alt or F10 alone
+        ShowBarMenu(IDM_BAR_MORE, true);
+        return true;
+    }
+    const wchar_t upper = static_cast<wchar_t>(reinterpret_cast<UINT_PTR>(
+        CharUpperW(reinterpret_cast<LPWSTR>(static_cast<UINT_PTR>(key)))));
+    const int count = GetMenuItemCount(moreMenu_);
+    for (int i = 0; i < count; ++i) {
+        wchar_t text[64] = {};
+        GetMenuStringW(moreMenu_, static_cast<UINT>(i), text, ARRAYSIZE(text), MF_BYPOSITION);
+        if (Mnemonic(text) == upper) {
+            // The menu's own mnemonic handling opens the matching submenu.
+            PostMessageW(hwnd_, WM_CHAR, key, 0);
+            ShowBarMenu(IDM_BAR_MORE, false);
+            return true;
+        }
+    }
+    return false;  // Alt+Space and friends: the system menu
+}
+
+void MainWindow::OnThemeChanged() {
+    theme::Refresh();
+    theme::ApplyFrame(hwnd_);
+    if (tree_.Hwnd()) theme::ApplyTree(tree_.Hwnd());
+    if (list_ && list_->Hwnd()) theme::ApplyListView(list_->Hwnd());
+    navBar_.OnThemeChanged();
+    commandBar_.OnThemeChanged();
+    RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+}
+
+int MainWindow::TextHeight() const {
+    TEXTMETRICW tm{};
+    HDC dc = GetDC(hwnd_);
+    HGDIOBJ old = SelectObject(dc, font_ ? static_cast<HGDIOBJ>(font_) : GetStockObject(DEFAULT_GUI_FONT));
+    GetTextMetricsW(dc, &tm);
+    SelectObject(dc, old);
+    ReleaseDC(hwnd_, dc);
+    return tm.tmHeight;
+}
+
+void MainWindow::OnPaint() {
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(hwnd_, &ps);
     RECT rc{};
     GetClientRect(hwnd_, &rc);
-    // Parts: message | file count | selection | selection size
-    const int w = Scale(140, dpi_);
-    int parts[4] = {rc.right - 3 * w, rc.right - 2 * w, rc.right - w, -1};
-    if (parts[0] < w) parts[0] = w;
-    SendMessageW(status_, SB_SETPARTS, ARRAYSIZE(parts), reinterpret_cast<LPARAM>(parts));
+    if (rc.right > 0 && rc.bottom > 0) {
+        // Children are clipped out, so only the chrome around them is drawn.
+        HDC memory = CreateCompatibleDC(dc);
+        HBITMAP canvas = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+        HGDIOBJ old = SelectObject(memory, canvas);
+        PaintChrome(memory, rc);
+        BitBlt(dc, ps.rcPaint.left, ps.rcPaint.top, ps.rcPaint.right - ps.rcPaint.left,
+               ps.rcPaint.bottom - ps.rcPaint.top, memory, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
+        SelectObject(memory, old);
+        DeleteObject(canvas);
+        DeleteDC(memory);
+    }
+    EndPaint(hwnd_, &ps);
 }
 
-void MainWindow::OnSize() {
-    if (toolbar_) SendMessageW(toolbar_, TB_AUTOSIZE, 0, 0);
-    if (status_) {
-        SendMessageW(status_, WM_SIZE, 0, 0);
-        UpdateStatusParts();
+void MainWindow::PaintChrome(HDC dc, const RECT& rc) {
+    const theme::Palette& p = theme::Current();
+    FillRect(dc, &rc, theme::WindowBrush());
+    if (fullscreen_) return;
+    SetBkMode(dc, TRANSPARENT);
+    HGDIOBJ oldFont = SelectObject(dc, font_ ? static_cast<HGDIOBJ>(font_) : GetStockObject(DEFAULT_GUI_FONT));
+
+    if (mode_ == Mode::Browser && !IsRectEmpty(&fieldRect_)) {
+        // Rounded path field with a hairline border; accent underline while
+        // it has the keyboard focus, like the Windows 11 text box.
+        HBRUSH fill = CreateSolidBrush(p.field);
+        HPEN pen = CreatePen(PS_SOLID, 1, p.border);
+        HGDIOBJ oldBrush = SelectObject(dc, fill);
+        HGDIOBJ oldPen = SelectObject(dc, pen);
+        RoundRect(dc, fieldRect_.left, fieldRect_.top, fieldRect_.right, fieldRect_.bottom, Scale(kRadius, dpi_),
+                  Scale(kRadius, dpi_));
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBrush);
+        DeleteObject(pen);
+        DeleteObject(fill);
+        if (GetFocus() == pathBar_) {
+            const int r = Scale(kRadius, dpi_) / 2;
+            RECT line{fieldRect_.left + r, fieldRect_.bottom - Scale(2, dpi_), fieldRect_.right - r, fieldRect_.bottom};
+            HBRUSH accent = CreateSolidBrush(p.accent);
+            FillRect(dc, &line, accent);
+            DeleteObject(accent);
+        }
     }
-    Layout();
+
+    // Hairline between the bars and the content.
+    HBRUSH border = CreateSolidBrush(p.border);
+    RECT line{0, content_.top - 1, rc.right, content_.top};
+    FillRect(dc, &line, border);
+    DeleteObject(border);
+
+    // Status line: message on the left, the other parts right-aligned.
+    if (!IsRectEmpty(&statusRect_)) {
+        SetTextColor(dc, p.text);
+        const int pad = Scale(kStatusPad, dpi_);
+        int right = statusRect_.right - pad;
+        for (int part = 3; part >= 1; --part) {
+            const std::wstring& text = statusText_[part];
+            if (text.empty()) continue;
+            SIZE size{};
+            GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
+            RECT r{right - size.cx, statusRect_.top, right, statusRect_.bottom};
+            DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            right -= size.cx + 2 * pad;
+        }
+        RECT r{statusRect_.left + pad, statusRect_.top, std::max(static_cast<int>(statusRect_.left) + pad, right), statusRect_.bottom};
+        DrawTextW(dc, statusText_[0].c_str(), static_cast<int>(statusText_[0].size()), &r,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_PATH_ELLIPSIS);
+    }
+    SelectObject(dc, oldFont);
 }
+
+void MainWindow::OnSize() { Layout(); }
 
 void MainWindow::Layout() {
     if (!hwnd_ || !pathBar_ || !list_ || !list_->Hwnd()) return;
     RECT rc{};
     GetClientRect(hwnd_, &rc);
-    int top = 0;
-    if (toolbar_) {
-        RECT tb{};
-        GetWindowRect(toolbar_, &tb);
-        top = tb.bottom - tb.top;
-    }
-    int bottom = rc.bottom;
-    if (status_) {
-        RECT sb{};
-        GetWindowRect(status_, &sb);
-        bottom -= sb.bottom - sb.top;
-    }
     const int gap = Scale(kGap, dpi_);
     const int splitter = Scale(kSplitter, dpi_);
+    const int textHeight = TextHeight();
+    const bool chrome = !fullscreen_;
 
-    TEXTMETRICW tm{};
-    HDC dc = GetDC(pathBar_);
-    HGDIOBJ old = SelectObject(dc, font_ ? static_cast<HGDIOBJ>(font_) : GetStockObject(DEFAULT_GUI_FONT));
-    GetTextMetricsW(dc, &tm);
-    SelectObject(dc, old);
-    ReleaseDC(pathBar_, dc);
-    const int pathHeight = tm.tmHeight + Scale(8, dpi_);
+    int top = 0;
+    if (chrome && mode_ == Mode::Browser) {
+        // Address row: up / refresh, then the rounded path field.
+        const int rowHeight = navBar_.Height();
+        const int navWidth = navBar_.ContentWidth();
+        SetWindowPos(navBar_.Hwnd(), nullptr, 0, 0, navWidth, rowHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        const int fieldHeight = Scale(kFieldHeight, dpi_);
+        fieldRect_ = RECT{navWidth, (rowHeight - fieldHeight) / 2, std::max<LONG>(navWidth, rc.right - gap),
+                          (rowHeight - fieldHeight) / 2 + fieldHeight};
+        const int pad = Scale(kFieldPad, dpi_);
+        SetWindowPos(pathBar_, nullptr, fieldRect_.left + pad, fieldRect_.top + (fieldHeight - textHeight) / 2,
+                     std::max(0, static_cast<int>(fieldRect_.right - fieldRect_.left) - 2 * pad), textHeight,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        top = rowHeight;
+    } else {
+        fieldRect_ = RECT{};
+    }
+    if (chrome) {
+        const int barHeight = commandBar_.Height();
+        SetWindowPos(commandBar_.Hwnd(), nullptr, 0, top, rc.right, barHeight, SWP_NOZORDER | SWP_NOACTIVATE);
+        top += barHeight + 1;  // hairline
+        const int statusHeight = textHeight + Scale(kStatusPad, dpi_);
+        statusRect_ = RECT{0, rc.bottom - statusHeight, rc.right, rc.bottom};
+    } else {
+        statusRect_ = RECT{};
+    }
+    const int bottom = chrome ? statusRect_.top : rc.bottom;
 
     if (mode_ == Mode::Viewer) {
-        // The picture takes everything between toolbar and status bar
+        // The picture takes everything between command bar and status line
         // (the whole client area in full screen).
-        const int viewerTop = fullscreen_ ? 0 : top;
-        const int viewerBottom = fullscreen_ ? rc.bottom : bottom;
-        SetWindowPos(viewer_.Hwnd(), nullptr, 0, viewerTop, rc.right, viewerBottom - viewerTop,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
+        content_ = RECT{0, top, rc.right, bottom};
+        SetWindowPos(viewer_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
+        InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
 
@@ -570,9 +814,7 @@ void MainWindow::Layout() {
         if (dwp) dwp = DeferWindowPos(dwp, child, nullptr, x, y, std::max(w, 0), std::max(h, 0),
                                       SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
     };
-    place(pathBar_, gap, top + gap, rc.right - 2 * gap, pathHeight);
-
-    content_ = RECT{0, top + gap + pathHeight + gap, rc.right, bottom};
+    content_ = RECT{0, top, rc.right, bottom};
     const int width = content_.right - content_.left;
     const int height = content_.bottom - content_.top;
     const int minPane = Scale(kMinPane, dpi_);
@@ -587,6 +829,7 @@ void MainWindow::Layout() {
     place(preview_.Hwnd(), 0, content_.top + tree + splitter, left, height - tree - splitter);
     place(list_->Hwnd(), left + splitter, content_.top, width - left - splitter, height);
     if (dwp) EndDeferWindowPos(dwp);
+    InvalidateRect(hwnd_, nullptr, FALSE);  // field, hairline and status line
 }
 
 MainWindow::Splitter MainWindow::HitTestSplitter(POINT pt) const {
@@ -768,6 +1011,11 @@ void MainWindow::OnCommand(UINT id) {
     case IDM_SORT_SIZE: OnSortCommand(SortKey::Size); break;
     case IDM_SORT_TYPE: OnSortCommand(SortKey::Type); break;
     case IDM_SORT_MODIFIED: OnSortCommand(SortKey::Modified); break;
+    case IDM_BAR_SORT:
+    case IDM_BAR_VIEW:
+    case IDM_BAR_MORE:
+        ShowBarMenu(id, false);
+        break;
     case IDM_HELP_ABOUT: {
         const std::wstring text = LoadStr(IDS_ABOUT_TEXT);
         const std::wstring title = LoadStr(IDS_APP_TITLE);
@@ -784,12 +1032,6 @@ LRESULT MainWindow::OnNotify(NMHDR* header) {
     LRESULT result = 0;
     if (tree_.OnNotify(header, result)) return result;
     if (list_->OnNotify(header, result)) return result;
-    if (header->code == TTN_GETDISPINFOW) {
-        auto* info = reinterpret_cast<NMTTDISPINFOW*>(header);
-        info->hinst = instance_;
-        info->lpszText = MAKEINTRESOURCEW(header->idFrom);  // tooltip string ID == command ID
-        return 0;
-    }
     return 0;
 }
 
@@ -825,6 +1067,8 @@ void MainWindow::OnDpiChanged(UINT dpi, const RECT* suggested) {
         font_ = CreateFontIndirectW(&metrics.lfMessageFont);
         if (font_ && pathBar_) SendMessageW(pathBar_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
     }
+    navBar_.SetDpi(dpi, font_);
+    commandBar_.SetDpi(dpi, font_);
     if (list_) {
         list_->SetDpi(dpi);
         list_->SetViewMode(list_->GetViewMode());
@@ -1228,7 +1472,6 @@ void MainWindow::RequestStatusUpdate() {
 }
 
 void MainWindow::UpdateStatus() {
-    if (!status_) return;
     if (mode_ == Mode::Viewer) {
         UpdateViewerStatus();
         return;
@@ -1253,7 +1496,9 @@ void MainWindow::UpdatePreview() {
 }
 
 void MainWindow::SetStatusText(int part, const std::wstring& text) {
-    if (status_) SendMessageW(status_, SB_SETTEXTW, static_cast<WPARAM>(part), reinterpret_cast<LPARAM>(text.c_str()));
+    if (part < 0 || part >= static_cast<int>(ARRAYSIZE(statusText_)) || statusText_[part] == text) return;
+    statusText_[part] = text;
+    if (hwnd_) InvalidateRect(hwnd_, &statusRect_, FALSE);
 }
 
 // ---- Viewer -----------------------------------------------------------------
@@ -1281,6 +1526,8 @@ void MainWindow::EnterViewer(int index) {
     if (mode_ != Mode::Viewer) {
         mode_ = Mode::Viewer;
         preview_.Show(std::wstring());
+        SetBarItems();
+        ShowWindow(navBar_.Hwnd(), SW_HIDE);
         ShowWindow(pathBar_, SW_HIDE);
         ShowWindow(tree_.Hwnd(), SW_HIDE);
         ShowWindow(preview_.Hwnd(), SW_HIDE);
@@ -1301,6 +1548,8 @@ void MainWindow::ExitViewer() {
     ShowWindow(viewer_.Hwnd(), SW_HIDE);
     viewer_.Clear();
     viewerCache_->Retain({});
+    SetBarItems();
+    ShowWindow(navBar_.Hwnd(), SW_SHOW);
     ShowWindow(pathBar_, SW_SHOW);
     ShowWindow(tree_.Hwnd(), SW_SHOW);
     ShowWindow(preview_.Hwnd(), SW_SHOW);
@@ -1374,7 +1623,7 @@ void MainWindow::RefreshViewerImage() {
 }
 
 void MainWindow::UpdateViewerStatus() {
-    if (mode_ != Mode::Viewer || !status_) return;
+    if (mode_ != Mode::Viewer) return;
     const int index = ViewerIndex();
     const auto slash = viewerPath_.find_last_of(L'\\');
     SetStatusText(0, slash == std::wstring::npos ? viewerPath_ : viewerPath_.substr(slash + 1));
@@ -1402,9 +1651,7 @@ void MainWindow::SetFullscreen(bool fullscreen) {
         MONITORINFO info = {sizeof(info)};
         GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &info);
         fullscreen_ = true;
-        SetMenu(hwnd_, nullptr);
-        ShowWindow(toolbar_, SW_HIDE);
-        ShowWindow(status_, SW_HIDE);
+        ShowWindow(commandBar_.Hwnd(), SW_HIDE);
         SetWindowLongPtrW(hwnd_, GWL_STYLE, (windowedStyle_ & ~WS_OVERLAPPEDWINDOW) | WS_POPUP);
         SetWindowPos(hwnd_, HWND_TOP, info.rcMonitor.left, info.rcMonitor.top,
                      info.rcMonitor.right - info.rcMonitor.left, info.rcMonitor.bottom - info.rcMonitor.top,
@@ -1412,9 +1659,7 @@ void MainWindow::SetFullscreen(bool fullscreen) {
     } else {
         fullscreen_ = false;
         SetWindowLongPtrW(hwnd_, GWL_STYLE, windowedStyle_);
-        SetMenu(hwnd_, menu_);
-        ShowWindow(toolbar_, SW_SHOW);
-        ShowWindow(status_, SW_SHOW);
+        ShowWindow(commandBar_.Hwnd(), SW_SHOW);
         SetWindowPlacement(hwnd_, &windowedPlacement_);
         SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
                      SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
@@ -1431,12 +1676,14 @@ void MainWindow::ToggleSlideshow() {
     if (mode_ == Mode::Browser) EnterViewer(list_->FocusedIndex());
     if (mode_ != Mode::Viewer) return;
     slideshow_ = SetTimer(hwnd_, kSlideshowTimer, static_cast<UINT>(slideshowSeconds_) * 1000u, nullptr) != 0;
+    commandBar_.SetChecked(IDM_VIEW_SLIDESHOW, slideshow_);
 }
 
 void MainWindow::StopSlideshow() {
     if (!slideshow_) return;
     slideshow_ = false;
     KillTimer(hwnd_, kSlideshowTimer);
+    commandBar_.SetChecked(IDM_VIEW_SLIDESHOW, false);
 }
 
 // ---- File management --------------------------------------------------------

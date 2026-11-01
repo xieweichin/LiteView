@@ -82,3 +82,9 @@
 #define IDS_BR_NOTHING_TO_UNDO      1411
 
 // Toolbar tooltips use the command ID as the string ID.
+
+// Command bar labels
+#define IDS_BAR_VIEW_PICTURE        1500
+#define IDS_BAR_BROWSE              1501
+#define IDS_BAR_SORT                1502
+#define IDS_BAR_VIEW                1503

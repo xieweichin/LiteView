@@ -260,12 +260,29 @@ BEGIN
     IDS_ERR_UNDO_RENAME     "無法復原批次改名：%s"
     IDS_BR_NOTHING_TO_UNDO  "沒有可以復原的批次改名。"
 
-    // Toolbar tooltips (string ID = command ID)
+    IDS_BAR_VIEW_PICTURE    "看圖"
+    IDS_BAR_BROWSE          "瀏覽"
+    IDS_BAR_SORT            "排序"
+    IDS_BAR_VIEW            "檢視"
+
+    // Command bar tooltips (string ID = command ID)
     IDM_NAV_PARENT_FOLDER   "上層資料夾 (Backspace)"
     IDM_VIEW_REFRESH        "重新整理 (F5)"
     IDM_NAV_TOGGLE_MODE     "看圖 (Enter)"
+    IDM_NAV_EXIT_VIEWER     "返回瀏覽 (Esc)"
+    IDM_NAV_PREV            "上一張 (PageUp)"
+    IDM_NAV_NEXT            "下一張 (PageDown、空白鍵)"
+    IDM_ZOOM_IN             "放大 (+)"
+    IDM_ZOOM_OUT            "縮小 (-)"
+    IDM_ZOOM_TOGGLE_FIT     "符合視窗 / 實際大小 (/)"
     IDM_ROTATE_LEFT         "向左旋轉 (Ctrl+[)"
     IDM_ROTATE_RIGHT        "向右旋轉 (Ctrl+])"
+    IDM_EDIT_RENAME         "改名 (F2)"
     IDM_EDIT_DELETE         "刪除 (Delete)"
     IDM_FILE_PROPERTIES     "圖片資訊 (Alt+Enter)"
+    IDM_VIEW_SLIDESHOW      "自動播放 (Ctrl+S)"
+    IDM_VIEW_FULLSCREEN     "全螢幕 (Ctrl+F)"
+    IDM_BAR_SORT            "排序方式"
+    IDM_BAR_VIEW            "檢視方式"
+    IDM_BAR_MORE            "更多選項 (Alt)"
 END

@@ -1,4 +1,5 @@
 #include "ui/FolderTree.h"
+#include "ui/Theme.h"
 
 #include <shellapi.h>
 #include <shlwapi.h>
@@ -92,13 +93,13 @@ HRESULT FolderTree::Create(HWND parent, HINSTANCE instance, UINT controlId, HWND
         std::lock_guard<std::mutex> lock(shared_->mutex);
         shared_->notify = notify;
     }
-    hwnd_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, nullptr,
+    hwnd_ = CreateWindowExW(0, WC_TREEVIEWW, nullptr,
                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_LINESATROOT |
                                 TVS_SHOWSELALWAYS | TVS_TRACKSELECT | TVS_EDITLABELS,
                             0, 0, 0, 0, parent, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(controlId)),
                             instance, nullptr);
     if (!hwnd_) return HRESULT_FROM_WIN32(GetLastError());
-    SetWindowTheme(hwnd_, L"Explorer", nullptr);
+    theme::ApplyTree(hwnd_);
     TreeView_SetExtendedStyle(hwnd_, TVS_EX_DOUBLEBUFFER | TVS_EX_AUTOHSCROLL,
                               TVS_EX_DOUBLEBUFFER | TVS_EX_AUTOHSCROLL);
 

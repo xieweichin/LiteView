@@ -57,5 +57,10 @@
 #define IDM_ROTATE_LEFT             40501 // Ctrl+[
 #define IDM_ROTATE_RIGHT            40502 // Ctrl+]
 
+// ---- Command bar drop-downs ------------------------------------------------
+#define IDM_BAR_SORT                40601 // 排序方式選單
+#define IDM_BAR_VIEW                40602 // 檢視方式選單
+#define IDM_BAR_MORE                40603 // 完整選單（Alt、F10）
+
 // ---- Help -------------------------------------------------------------------
 #define IDM_HELP_ABOUT              40901

@@ -8,6 +8,7 @@
 
 #include "core/BatchRename.h"
 #include "res/resource.h"
+#include "ui/Theme.h"
 
 namespace {
 
@@ -170,9 +171,9 @@ LRESULT OnCustomDraw(DialogState& state, NMLVCUSTOMDRAW* draw) {
     case CDDS_ITEMPREPAINT: {
         const auto index = static_cast<std::size_t>(draw->nmcd.dwItemSpec);
         if (index < state.plan.size() && state.plan[index].issue != RenameIssue::None) {
-            draw->clrText = RGB(200, 0, 0);
+            draw->clrText = theme::Current().error;
         } else if (index < state.plan.size() && !state.plan[index].Changes()) {
-            draw->clrText = GetSysColor(COLOR_GRAYTEXT);
+            draw->clrText = theme::Current().subtleText;
         }
         return CDRF_DODEFAULT;
     }
@@ -187,8 +188,17 @@ INT_PTR CALLBACK DialogProc(HWND dialog, UINT msg, WPARAM wParam, LPARAM lParam)
         SetWindowLongPtrW(dialog, DWLP_USER, lParam);
         state = reinterpret_cast<DialogState*>(lParam);
         InitDialog(dialog, *state);
+        theme::ApplyDialog(dialog);
         SetFocus(GetDlgItem(dialog, IDC_BR_PATTERN));
         return FALSE;
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLOREDIT: {
+        LRESULT brush = 0;
+        if (theme::HandleCtlColor(msg, wParam, lParam, brush)) return static_cast<INT_PTR>(brush);
+        break;
+    }
     case WM_COMMAND:
         if (!state || state->running) return TRUE;
         switch (LOWORD(wParam)) {

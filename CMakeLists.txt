@@ -69,11 +69,15 @@ add_executable(LiteView WIN32
     src/ui/ViewerView.h
     src/ui/Messages.h
     src/ui/Commands.h
+    src/ui/CommandBar.cpp
+    src/ui/CommandBar.h
+    src/ui/Theme.cpp
+    src/ui/Theme.h
     src/res/resource.h
     src/res/LiteView.rc)
 target_include_directories(LiteView PRIVATE src src/res)
 target_link_libraries(LiteView PRIVATE LiteViewCore liteview_options
-    comctl32 shlwapi ole32 shell32 uuid uxtheme msimg32 d2d1)
+    comctl32 shlwapi ole32 shell32 uuid uxtheme msimg32 d2d1 dwmapi)
 
 if(MSVC)
     # The manifest is embedded by LiteView.rc.

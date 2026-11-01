@@ -10,6 +10,7 @@
 
 #include "core/ThumbnailService.h"
 #include "res/resource.h"
+#include "ui/Theme.h"
 
 namespace {
 
@@ -85,13 +86,12 @@ void FileListView::RebuildThumbnailImageList() {
 
 
 HRESULT FileListView::Create(HWND parent, HINSTANCE instance, UINT controlId) {
-    hwnd_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, nullptr,
+    hwnd_ = CreateWindowExW(0, WC_LISTVIEWW, nullptr,
                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA |
                                 LVS_SHAREIMAGELISTS | LVS_SHOWSELALWAYS | LVS_EDITLABELS | LVS_AUTOARRANGE,
                             0, 0, 0, 0, parent, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(controlId)),
                             instance, nullptr);
     if (!hwnd_) return HRESULT_FROM_WIN32(GetLastError());
-    SetWindowTheme(hwnd_, L"Explorer", nullptr);
     ListView_SetExtendedListViewStyle(hwnd_, LVS_EX_DOUBLEBUFFER | LVS_EX_FULLROWSELECT | LVS_EX_LABELTIP);
 
     imageSmall_ = ShellImageList(SHIL_SMALL);
@@ -101,6 +101,7 @@ HRESULT FileListView::Create(HWND parent, HINSTANCE instance, UINT controlId) {
     ListView_SetImageList(hwnd_, imageSmall_, LVSIL_SMALL);
 
     AddColumns(instance);
+    theme::ApplyListView(hwnd_);  // after the header exists
     SetDpi(GetDpiForWindow(hwnd_));
     SetViewMode(ViewMode::Details);
     return S_OK;
@@ -463,7 +464,9 @@ void FileListView::DrawThumbnail(HDC dc, int index) {
         DeleteDC(memory);
         // Thin frame so white pictures do not melt into the background.
         RECT frame{x - 1, y - 1, x + w + 1, y + h + 1};
-        FrameRect(dc, &frame, GetSysColorBrush(COLOR_BTNSHADOW));
+        HBRUSH border = CreateSolidBrush(theme::Current().border);
+        FrameRect(dc, &frame, border);
+        DeleteObject(border);
         return;
     }
     // Not ready: the file-type icon stands in.

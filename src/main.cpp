@@ -7,6 +7,7 @@
 
 #include "res/resource.h"
 #include "ui/MainWindow.h"
+#include "ui/Theme.h"
 
 namespace {
 
@@ -52,6 +53,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     INITCOMMONCONTROLSEX icc = {sizeof(icc), ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES |
                                                  ICC_TREEVIEW_CLASSES | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icc);
+    theme::InitProcess();  // light or dark, following Windows
 
     int exitCode = 0;
     {

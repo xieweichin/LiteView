@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "res/resource.h"
+#include "ui/Theme.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -345,9 +346,17 @@ HRESULT ViewerView::EnsureBitmap() {
 
 void ViewerView::OnPaint() {
     PAINTSTRUCT ps;
-    BeginPaint(hwnd_, &ps);
+    HDC paintDc = BeginPaint(hwnd_, &ps);
+    if (FAILED(EnsureTarget())) {
+        // No Direct2D (e.g. a remote session without a driver): at least
+        // keep the area clean.
+        HBRUSH brush = CreateSolidBrush(fullscreen_ ? RGB(0, 0, 0) : theme::Current().viewer);
+        FillRect(paintDc, &ps.rcPaint, brush);
+        DeleteObject(brush);
+        EndPaint(hwnd_, &ps);
+        return;
+    }
     EndPaint(hwnd_, &ps);
-    if (FAILED(EnsureTarget())) return;
     EnsureBitmap();
 
     const SIZE view = ViewSize();
@@ -356,7 +365,9 @@ void ViewerView::OnPaint() {
         target_->Resize(D2D1::SizeU(std::max<LONG>(1, view.cx), std::max<LONG>(1, view.cy)));
     }
     target_->BeginDraw();
-    target_->Clear(fullscreen_ ? D2D1::ColorF(0, 0, 0) : D2D1::ColorF(0.19f, 0.19f, 0.19f));
+    const COLORREF background = fullscreen_ ? RGB(0, 0, 0) : theme::Current().viewer;
+    target_->Clear(D2D1::ColorF(GetRValue(background) / 255.0f, GetGValue(background) / 255.0f,
+                                GetBValue(background) / 255.0f));
     if (bitmap_ && image_ && pendingTurns_ != 0) {
         // Turned preview: fit the rotated picture, ignoring zoom.
         const bool sideways = pendingTurns_ % 2 != 0;
@@ -401,7 +412,7 @@ void ViewerView::OnPaint() {
         const std::wstring text = LoadStr(IDS_VIEWER_ERROR);
         RECT rc{0, 0, view.cx, view.cy};
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(220, 220, 220));
+        SetTextColor(dc, fullscreen_ ? RGB(220, 220, 220) : theme::Current().text);
         HGDIOBJ old = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
         DrawTextW(dc, text.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, old);
