@@ -292,6 +292,20 @@ HRESULT MainWindow::Create(HINSTANCE instance, int showCommand, const std::wstri
 
 bool MainWindow::TranslateAccelerator(MSG* msg) {
     if (!hwnd_) return false;
+    // The read-only text page keeps its reading keys; the rest of the viewer
+    // shortcuts (Esc, Enter, F2, zoom, Ctrl+F...) still apply there.
+    if (mode_ == Mode::Viewer && viewerIsText_ && textView_.EditHwnd() && GetFocus() == textView_.EditHwnd()) {
+        if (msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN) {
+            switch (msg->wParam) {
+            case VK_PRIOR: case VK_NEXT: case VK_HOME: case VK_END: case VK_SPACE:
+            case VK_UP: case VK_DOWN: case VK_LEFT: case VK_RIGHT: case VK_BACK: case VK_DELETE:
+                return false;
+            default:
+                break;
+            }
+        }
+        return accelViewer_ && ::TranslateAcceleratorW(hwnd_, accelViewer_, msg) != 0;
+    }
     // Let edit boxes (path bar, in-place rename) keep Backspace, Delete, Ctrl+A...
     if (FocusIsTextInput()) return false;
     HACCEL table = (mode_ == Mode::Viewer) ? accelViewer_ : accelBrowser_;
@@ -396,7 +410,8 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         OnRotated();
         return 0;
     case WM_CONTEXTMENU:
-        if (reinterpret_cast<HWND>(wParam) == list_->Hwnd() || reinterpret_cast<HWND>(wParam) == viewer_.Hwnd()) {
+        if (reinterpret_cast<HWND>(wParam) == list_->Hwnd() || reinterpret_cast<HWND>(wParam) == viewer_.Hwnd() ||
+            reinterpret_cast<HWND>(wParam) == textView_.Hwnd()) {
             ShowContextMenu(POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
             return 0;
         }
@@ -419,7 +434,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_SETFOCUS:
         if (mode_ == Mode::Viewer && viewer_.Hwnd()) {
-            SetFocus(viewer_.Hwnd());
+            SetFocus(viewerIsText_ ? textView_.Hwnd() : viewer_.Hwnd());
         } else if (list_ && list_->Hwnd()) {
             SetFocus(list_->Hwnd());
         }
@@ -507,6 +522,7 @@ bool MainWindow::OnCreate() {
     };
     callbacks.viewChanged = [this] { UpdateViewerStatus(); };
     if (FAILED(viewer_.Create(hwnd_, instance_, std::move(callbacks)))) return false;
+    if (FAILED(textView_.Create(hwnd_, instance_, [this] { UpdateViewerStatus(); }))) return false;
     CreateMenus();
     SetBarItems();
     list_->SetRenameCallback([this](int index, const std::wstring& name) { return RenameItem(index, name); });
@@ -674,6 +690,7 @@ void MainWindow::OnThemeChanged() {
     if (list_ && list_->Hwnd()) theme::ApplyListView(list_->Hwnd());
     navBar_.OnThemeChanged();
     commandBar_.OnThemeChanged();
+    textView_.OnThemeChanged();
     RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
@@ -807,6 +824,7 @@ void MainWindow::Layout() {
         // (the whole client area in full screen).
         content_ = RECT{0, top, rc.right, bottom};
         SetWindowPos(viewer_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(textView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
         InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
@@ -988,13 +1006,19 @@ void MainWindow::OnCommand(UINT id) {
         if (mode_ == Mode::Viewer && model_->Count() > 0) ShowViewerIndex(static_cast<int>(model_->Count()) - 1, -1);
         break;
     case IDM_ZOOM_IN:
-        if (mode_ == Mode::Viewer) viewer_.ZoomIn();
+        if (mode_ == Mode::Viewer) {
+            if (viewerIsText_) textView_.ZoomIn(); else viewer_.ZoomIn();
+        }
         break;
     case IDM_ZOOM_OUT:
-        if (mode_ == Mode::Viewer) viewer_.ZoomOut();
+        if (mode_ == Mode::Viewer) {
+            if (viewerIsText_) textView_.ZoomOut(); else viewer_.ZoomOut();
+        }
         break;
     case IDM_ZOOM_TOGGLE_FIT:
-        if (mode_ == Mode::Viewer) viewer_.ToggleFit();
+        if (mode_ == Mode::Viewer) {
+            if (viewerIsText_) textView_.ResetZoom(); else viewer_.ToggleFit();
+        }
         break;
     case IDM_VIEW_FULLSCREEN:
         if (mode_ == Mode::Browser) EnterViewer(list_->FocusedIndex());
@@ -1599,8 +1623,8 @@ void MainWindow::EnterViewer(int index) {
         ShowWindow(preview_.Hwnd(), SW_HIDE);
         ShowWindow(list_->Hwnd(), SW_HIDE);
         Layout();  // size the viewer before its first paint
-        ShowWindow(viewer_.Hwnd(), SW_SHOW);
-        SetFocus(viewer_.Hwnd());
+        viewerIsText_ = model_->At(static_cast<std::size_t>(index)).kind == FileKind::Text;
+        ShowViewerPage();
     }
     ShowViewerIndex(index, 1);
 }
@@ -1612,7 +1636,10 @@ void MainWindow::ExitViewer() {
     if (fullscreen_) SetFullscreen(false);
     mode_ = Mode::Browser;
     ShowWindow(viewer_.Hwnd(), SW_HIDE);
+    ShowWindow(textView_.Hwnd(), SW_HIDE);
     viewer_.Clear();
+    textView_.Clear();
+    viewerIsText_ = false;
     viewerCache_->Retain({});
     SetBarItems();
     ShowWindow(navBar_.Hwnd(), SW_SHOW);
@@ -1650,13 +1677,24 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     viewerDirection_ = direction;
     const UINT side = ScreenSide();
 
-    ViewerImagePtr image = viewerCache_->Get(viewerPath_, side);
-    ThumbnailPtr placeholder;
-    if (!image) {
-        placeholder = thumbnails_->TryGetCached(list_->MakeThumbnailRequest(index));
-        viewerCache_->Request(viewerPath_, side, true);
+    const bool text = model_->At(static_cast<std::size_t>(index)).kind == FileKind::Text;
+    if (text != viewerIsText_) {
+        viewerIsText_ = text;
+        ShowViewerPage();
     }
-    viewer_.SetImage(viewerPath_, image, placeholder, viewerCache_->Failed(viewerPath_));
+    if (text) {
+        viewer_.Clear();
+        textView_.Show(viewerPath_);
+    } else {
+        textView_.Clear();
+        ViewerImagePtr image = viewerCache_->Get(viewerPath_, side);
+        ThumbnailPtr placeholder;
+        if (!image) {
+            placeholder = thumbnails_->TryGetCached(list_->MakeThumbnailRequest(index));
+            viewerCache_->Request(viewerPath_, side, true);
+        }
+        viewer_.SetImage(viewerPath_, image, placeholder, viewerCache_->Failed(viewerPath_));
+    }
 
     // Preload the neighbours, the one in the travel direction first, and
     // let everything else go.
@@ -1664,6 +1702,7 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     for (int offset : {direction, -direction}) {
         const int neighbour = index + offset;
         if (neighbour < 0 || static_cast<std::size_t>(neighbour) >= count) continue;
+        if (model_->At(static_cast<std::size_t>(neighbour)).kind != FileKind::Image) continue;
         const std::wstring path = model_->FullPath(static_cast<std::size_t>(neighbour));
         keep.push_back(path);
         viewerCache_->Request(path, side, false);
@@ -1676,8 +1715,16 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     UpdateViewerStatus();
 }
 
+void MainWindow::ShowViewerPage() {
+    // Called in viewer mode when the kind of the current file changes.
+    HWND page = viewerIsText_ ? textView_.Hwnd() : viewer_.Hwnd();
+    ShowWindow(page, SW_SHOW);
+    ShowWindow(viewerIsText_ ? viewer_.Hwnd() : textView_.Hwnd(), SW_HIDE);
+    SetFocus(page);
+}
+
 void MainWindow::RefreshViewerImage() {
-    if (mode_ != Mode::Viewer || viewerPath_.empty()) return;
+    if (mode_ != Mode::Viewer || viewerPath_.empty() || viewerIsText_) return;
     // Prefer the sharpest decode we have for the current picture.
     ViewerImagePtr image = viewerCache_->GetAny(viewerPath_);
     if (image) {
@@ -1698,7 +1745,18 @@ void MainWindow::UpdateViewerStatus() {
     if (first != std::wstring::npos) position.replace(first, 2, std::to_wstring(index + 1));
     position = Format(position, model_->Count());
     SetStatusText(1, position);
-    if (viewer_.HasImage()) {
+    if (viewerIsText_) {
+        if (textView_.Loading()) {
+            SetStatusText(2, LoadStr(IDS_VIEWER_LOADING));
+        } else if (textView_.Failed()) {
+            SetStatusText(2, LoadStr(IDS_TEXT_ERROR));
+        } else {
+            std::wstring info = TextEncodingName(textView_.Encoding());
+            if (textView_.Truncated()) info += LoadStr(IDS_TEXT_TRUNCATED);
+            SetStatusText(2, info);
+        }
+        SetStatusText(3, Format(LoadStr(IDS_VIEWER_ZOOM), static_cast<std::size_t>(textView_.ZoomPercent())));
+    } else if (viewer_.HasImage()) {
         SetStatusText(2, std::to_wstring(viewer_.ImageWidth()) + L" × " + std::to_wstring(viewer_.ImageHeight()));
         const auto percent = static_cast<std::size_t>(viewer_.EffectiveScale() * 100.0 + 0.5);
         SetStatusText(3, Format(LoadStr(IDS_VIEWER_ZOOM), percent));
@@ -1731,6 +1789,7 @@ void MainWindow::SetFullscreen(bool fullscreen) {
                      SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
     }
     viewer_.SetFullscreen(fullscreen_);
+    textView_.SetFullscreen(fullscreen_);
     OnSize();
 }
 
@@ -1966,12 +2025,14 @@ void MainWindow::RotateSelection(bool clockwise) {
     std::vector<int> indices;
     if (mode_ == Mode::Viewer) {
         const int index = ViewerIndex();
-        if (index >= 0) indices.push_back(index);
+        if (index < 0 || viewerIsText_) return;
+        indices.push_back(index);
         viewer_.RotatePending(clockwise);  // turn on screen right away
     } else {
         indices = list_->SelectedIndices();
     }
     for (int index : indices) {
+        if (model_->At(static_cast<std::size_t>(index)).kind != FileKind::Image) continue;  // text files
         RotateState::Result job{model_->FullPath(static_cast<std::size_t>(index)), list_->MakeThumbnailRequest(index), E_PENDING};
         const auto state = rotateState_;
         const HRESULT submitted = rotatePool_->Submit([state, job, clockwise]() mutable {

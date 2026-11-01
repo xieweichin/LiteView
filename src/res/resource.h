@@ -96,3 +96,7 @@
 #define IDS_CODECS_TITLE            1603
 #define IDS_VIEWER_ERROR_HEIF       1604
 #define IDS_LIST_SEPARATOR          1605
+
+// Text files
+#define IDS_TEXT_ERROR              1700
+#define IDS_TEXT_TRUNCATED          1701

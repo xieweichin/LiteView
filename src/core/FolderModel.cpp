@@ -1,6 +1,7 @@
 #include "core/FolderModel.h"
 
 #include "core/FormatSupport.h"
+#include "core/TextDocument.h"
 
 #include <shlwapi.h>
 
@@ -176,7 +177,10 @@ void FolderModel::Load(const std::shared_ptr<State>& state, std::wstring path,
                             if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
                             const wchar_t* extension = PathFindExtensionW(data.cFileName);
                             CodecPack pack;
-                            if (!HasExtension(extensions, extension)) {
+                            FileKind kind = FileKind::Image;
+                            const bool image = HasExtension(extensions, extension);
+                            if (!image && IsTextExtension(extension)) kind = FileKind::Text;
+                            if (!image && kind != FileKind::Text) {
                                 // A known format whose codec extension is not installed.
                                 if (CodecPackForExtension(extension, pack)) {
                                     ++gap.files;
@@ -187,7 +191,7 @@ void FolderModel::Load(const std::shared_ptr<State>& state, std::wstring path,
                                 if (id == 0) id = state->nextItemId.fetch_add(1);
                                 items.push_back(FileItem{data.cFileName,
                                     (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow,
-                                    data.ftLastWriteTime, id});
+                                    data.ftLastWriteTime, id, kind});
                             }
                         } while (FindNextFileW(search.handle, &data));
                         const DWORD error = GetLastError();

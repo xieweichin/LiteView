@@ -87,6 +87,7 @@ Nov 1, 2026 · @偉欽
 - **一定支援**：JPEG、PNG、GIF（第一影格）、BMP、TIFF、ICO。
 - **有裝系統擴充就支援**：WebP、HEIC、AVIF、各家相機 RAW、JPEG XL（Windows 10/11 從 Microsoft Store 裝擴充即可）。
   資料夾裡有這些格式但還沒裝擴充時，狀態列會顯示「有 N 個 … 檔案需要安裝 Windows 擴充」，按一下直接開 Store 安裝頁；「說明 → 取得更多圖片格式」可檢查整台電腦缺哪些。HEIC 另需 HEVC 視訊延伸模組，打不開時檢視畫面會提示。
+- **文字檔**：txt、md、log、csv、json、xml、yaml、ini 與常見程式碼。瀏覽模式的預覽窗格顯示開頭幾行；按 Enter 進入檢視模式，用等寬字型唯讀顯示（自動換行，可選取複製，+/- 調整字級），編碼自動判斷 UTF-8／UTF-16／系統 ANSI（繁中 Windows 為 Big5），超過 8 MB 只顯示開頭。PageUp/PageDown/空白鍵在文字頁用來捲動，換檔用滑鼠或命令列按鈕。
 
 | 指標 | 目標 |
 | --- | --- |

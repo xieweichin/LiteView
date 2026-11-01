@@ -232,6 +232,8 @@ BEGIN
     IDS_CODECS_ALL_INSTALLED "HEIF（HEIC）、WebP、AVIF、相機 RAW、JPEG XL 都已可預覽。\n\nHEIC 照片若仍打不開，請另外安裝 Microsoft Store 的「HEVC 視訊延伸模組」。"
     IDS_CODECS_MISSING      "這台電腦還不能預覽：%s\n\n這些格式由 Windows 解碼，需要從 Microsoft Store 安裝對應的影像延伸模組（多數免費；HEIC 照片另需 HEVC 視訊延伸模組）。裝好後按 F5 重新整理即可。\n\n要現在開啟 %s 的安裝頁面嗎？"
     IDS_LIST_SEPARATOR      "、"
+    IDS_TEXT_ERROR          "無法讀取這個檔案"
+    IDS_TEXT_TRUNCATED      "（檔案太大，只顯示前 8 MB）"
 
     IDS_NEW_FOLDER          "新增資料夾"
     IDS_PICK_COPY_TARGET    "複製到哪個資料夾"

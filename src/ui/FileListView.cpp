@@ -475,7 +475,8 @@ void FileListView::DrawThumbnail(HDC dc, int index) {
         ImageList_Draw(imageExtraLarge_, IconIndex(file.name), dc, cell.left + (cellW - iconW) / 2,
                        cell.top + (cellH - iconH) / 2, ILD_TRANSPARENT);
     }
-    if (!failed) thumbnails_->Request(request, true);
+    // Text files have no thumbnail: keep the icon without asking.
+    if (!failed && file.kind != FileKind::Text) thumbnails_->Request(request, true);
 }
 
 void FileListView::OnThumbnailReady(std::uint32_t generation, std::uint32_t itemId) {

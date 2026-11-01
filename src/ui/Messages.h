@@ -14,3 +14,4 @@ constexpr UINT WM_APP_THUMB_READY = WM_APP + 7;      // wParam: generation, lPar
 constexpr UINT WM_APP_PREVIEW_READY = WM_APP + 8;    // PreviewPane: its decode finished
 constexpr UINT WM_APP_VIEWER_READY = WM_APP + 9;     // ViewerCache finished a decode
 constexpr UINT WM_APP_ROTATED = WM_APP + 10;         // a background rotation finished
+constexpr UINT WM_APP_TEXT_READY = WM_APP + 11;      // TextView: its file finished loading

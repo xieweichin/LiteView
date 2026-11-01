@@ -11,11 +11,15 @@
 
 #include "core/ThreadPool.h"
 
+// What the viewer does with a file: decode it with WIC, or show it as text.
+enum class FileKind : std::uint8_t { Image, Text };
+
 struct FileItem {
     std::wstring name;
     std::uint64_t size = 0;
     FILETIME modified{};
     std::uint32_t id = 0;
+    FileKind kind = FileKind::Image;
 };
 
 // Files in a folder that are a known image format whose Windows codec
