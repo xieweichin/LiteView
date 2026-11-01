@@ -241,21 +241,28 @@ HRESULT RenderPdfPage(const std::wstring& file, UINT page, UINT maxSide, ComPtr<
         if (FAILED(hr)) { g_lastStep = 10; return hr; }
         options->put_DestinationWidth(w);
         options->put_DestinationHeight(h);
-        options->put_BitmapEncoderId(GUID_ContainerFormatBmp);  // cheaper to write and read back than PNG
 
-        ComPtr<IInspectable> memory;
-        hr = Activate(L"Windows.Storage.Streams.InMemoryRandomAccessStream", memory);
-        if (FAILED(hr)) { g_lastStep = 11; return hr; }
+        // BMP is cheaper to write and read back than the default PNG, but not
+        // every Windows build accepts it: fall back to PNG on failure.
         ComPtr<IInspectable> output;
-        hr = memory->QueryInterface(kIidRandomAccessStream, reinterpret_cast<void**>(output.GetAddressOf()));
-        if (FAILED(hr)) { g_lastStep = 12; return hr; }
-        ComPtr<IAsyncActionLite> render;
-        hr = pdfPage->RenderWithOptionsToStreamAsync(output.Get(), options.Get(), render.GetAddressOf());
-        if (FAILED(hr)) { g_lastStep = 13; return hr; }
-        hr = Wait(render.Get());
-        if (FAILED(hr)) { g_lastStep = 14; return hr; }
-        hr = render->GetResults();
-        if (FAILED(hr)) { g_lastStep = 15; return hr; }
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            options->put_BitmapEncoderId(attempt == 0 ? GUID_ContainerFormatBmp : GUID_ContainerFormatPng);
+            ComPtr<IInspectable> memory;
+            hr = Activate(L"Windows.Storage.Streams.InMemoryRandomAccessStream", memory);
+            if (FAILED(hr)) { g_lastStep = 11; return hr; }
+            output.Reset();
+            hr = memory->QueryInterface(kIidRandomAccessStream, reinterpret_cast<void**>(output.GetAddressOf()));
+            if (FAILED(hr)) { g_lastStep = 12; return hr; }
+            ComPtr<IAsyncActionLite> render;
+            hr = pdfPage->RenderWithOptionsToStreamAsync(output.Get(), options.Get(), render.GetAddressOf());
+            if (FAILED(hr)) { g_lastStep = 13; continue; }
+            hr = Wait(render.Get());
+            if (FAILED(hr)) { g_lastStep = 14; continue; }
+            hr = render->GetResults();
+            if (FAILED(hr)) { g_lastStep = 15; continue; }
+            break;
+        }
+        if (FAILED(hr)) return hr;
 
         // Read the rendered bitmap back with WIC.
         ComPtr<IStream> stream;
