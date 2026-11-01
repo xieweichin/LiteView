@@ -113,3 +113,11 @@
 // 3D models
 #define IDS_MODEL_ERROR             2000
 #define IDS_MODEL_TRIANGLES         2001
+
+// Videos
+#define IDS_VIDEO_ERROR             2100
+#define IDS_VIDEO_NO_CODEC          2101
+#define IDS_VIDEO_NO_CODEC_SHORT    2102
+#define IDS_VIDEO_PLAYING           2103
+#define IDS_VIDEO_PAUSED            2104
+#define IDS_VIDEO_ENDED             2105

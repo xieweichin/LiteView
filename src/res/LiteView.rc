@@ -242,6 +242,12 @@ BEGIN
     IDS_PDF_PAGE            "第 %u / %u 頁（Ctrl+PageUp/PageDown 換頁）"
     IDS_MODEL_ERROR         "無法開啟這個 3D 檔"
     IDS_MODEL_TRIANGLES     "%u 個三角形（拖曳旋轉，/ 重設）"
+    IDS_VIDEO_ERROR         "無法播放這部影片"
+    IDS_VIDEO_NO_CODEC      "這部影片的格式需要 Windows 視訊延伸模組（例如 HEVC、AV1、VP9）。\n按一下開啟 Microsoft Store 搜尋並安裝。"
+    IDS_VIDEO_NO_CODEC_SHORT "需要視訊延伸模組"
+    IDS_VIDEO_PLAYING       "播放中（空白鍵暫停，←／→ 快轉 5 秒）"
+    IDS_VIDEO_PAUSED        "已暫停（空白鍵播放）"
+    IDS_VIDEO_ENDED         "播放完畢"
     IDS_TEXT_TRUNCATED      "（檔案太大，只顯示前 8 MB）"
 
     IDS_NEW_FOLDER          "新增資料夾"

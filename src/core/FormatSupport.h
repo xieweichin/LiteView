@@ -36,6 +36,13 @@ CodecPack FirstCodecPack(std::uint32_t mask) noexcept;
 // (".docx", ".xlsx", ".pptx", ".odt", ".rtf"...).
 bool IsDocumentExtension(const wchar_t* extension) noexcept;
 
+// Videos played with Media Foundation (".mp4", ".mov", ".mkv", ".wmv"...).
+// ".ts" is left to TypeScript; MPEG transport streams use ".m2ts" / ".mts".
+bool IsVideoExtension(const wchar_t* extension) noexcept;
+
+// "m:ss", or "h:mm:ss" from one hour, for a time in 100-ns units.
+std::wstring FormatMediaTime(long long hundredNanoseconds);
+
 // Product name shown to the user ("HEIF", "WebP", ...).
 const wchar_t* CodecPackName(CodecPack pack) noexcept;
 
