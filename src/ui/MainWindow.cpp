@@ -20,6 +20,8 @@ constexpr int kMinWidth = 480;   // in 96-DPI pixels
 constexpr int kMinHeight = 320;
 constexpr UINT kSettingsReady = WM_APP + 1;
 constexpr UINT kSettingsSaved = WM_APP + 2;
+constexpr UINT_PTR kSettingsTimer = 1;
+constexpr UINT kSettingsWaitMs = 200;
 
 int Scale(int value, UINT dpi) { return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI); }
 
@@ -96,9 +98,11 @@ HRESULT MainWindow::Create(HINSTANCE instance, int showCommand) {
         return settingsResult;
     }
 
-    // Keep the window hidden until the background settings read completes.
-    // The message loop can run while the disk is slow, without displaying the
-    // default placement first and then jumping to the saved placement.
+    // Wait briefly for settings without blocking the message loop. A slow
+    // disk must not leave the application invisible indefinitely.
+    if (!SetTimer(hwnd_, kSettingsTimer, kSettingsWaitMs, nullptr)) {
+        ShowInitialWindow(showCommand_);
+    }
     return S_OK;
 }
 
@@ -148,6 +152,13 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_CLOSE:
         OnClose();
         return 0;
+    case WM_TIMER:
+        if (wParam == kSettingsTimer) {
+            KillTimer(hwnd_, kSettingsTimer);
+            if (!closing_) ShowInitialWindow(showCommand_);
+            return 0;
+        }
+        break;
     case kSettingsReady:
         OnSettingsReady(wParam);
         return 0;
@@ -359,6 +370,7 @@ void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noe
 
 void MainWindow::OnSettingsReady(WPARAM token) {
     if (!settingsState_ || token != reinterpret_cast<WPARAM>(settingsState_.get()) || closing_) return;
+    KillTimer(hwnd_, kSettingsTimer);
     RECT rect{};
     bool maximized = false;
     bool canRestore = false;
@@ -371,7 +383,7 @@ void MainWindow::OnSettingsReady(WPARAM token) {
         hr = settingsState_->readResult;
     }
     int command = showCommand_;
-    if (canRestore && MonitorFromRect(&rect, MONITOR_DEFAULTTONULL)) {
+    if (!shown_ && canRestore && MonitorFromRect(&rect, MONITOR_DEFAULTTONULL)) {
         WINDOWPLACEMENT placement{sizeof(placement)};
         if (GetWindowPlacement(hwnd_, &placement)) {
             placement.rcNormalPosition = rect;
@@ -383,17 +395,24 @@ void MainWindow::OnSettingsReady(WPARAM token) {
             }
         }
     }
-    ShowWindow(hwnd_, command);
-    UpdateWindow(hwnd_);
+    ShowInitialWindow(command);
     if (FAILED(hr)) {
         MessageBoxW(hwnd_, LoadStr(IDS_ERR_SETTINGS_READ).c_str(), LoadStr(IDS_APP_TITLE).c_str(),
                     MB_OK | MB_ICONWARNING);
     }
 }
 
+void MainWindow::ShowInitialWindow(int command) {
+    if (shown_) return;
+    shown_ = true;
+    ShowWindow(hwnd_, command);
+    UpdateWindow(hwnd_);
+}
+
 void MainWindow::OnClose() {
     if (closing_) return;
     closing_ = true;
+    KillTimer(hwnd_, kSettingsTimer);
     WINDOWPLACEMENT placement{sizeof(placement)};
     if (!settingsState_ || !GetWindowPlacement(hwnd_, &placement)) {
         DestroyWindow(hwnd_);

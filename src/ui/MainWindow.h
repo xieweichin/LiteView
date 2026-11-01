@@ -35,6 +35,7 @@ private:
     void OnDpiChanged(UINT dpi, const RECT* suggested);
     HRESULT StartSettingsWorker() noexcept;
     void OnSettingsReady(WPARAM token);
+    void ShowInitialWindow(int command);
     void OnClose();
     void OnSettingsSaved(WPARAM token);
 
@@ -55,6 +56,7 @@ private:
     Mode mode_ = Mode::Browser;
     UINT dpi_ = USER_DEFAULT_SCREEN_DPI;
     bool closing_ = false;
+    bool shown_ = false;
     int showCommand_ = SW_SHOWNORMAL;
     std::shared_ptr<SettingsState> settingsState_;
     std::thread settingsThread_;
