@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "core/FolderModel.h"
+#include "core/ThumbnailService.h"
 #include "ui/FileListView.h"
 #include "ui/FolderTree.h"
 #include "ui/PreviewPane.h"
@@ -77,6 +78,7 @@ private:
     void SetViewMode(FileListView::ViewMode mode);
     void RequestStatusUpdate();
     void UpdateStatus();
+    void UpdatePreview();
     void SetStatusText(int part, const std::wstring& text);
 
     // Layout and splitters
@@ -127,6 +129,7 @@ private:
 
     std::shared_ptr<ThreadPool> pool_;
     std::unique_ptr<FolderModel> model_;
+    std::unique_ptr<ThumbnailService> thumbnails_;
     std::unique_ptr<FileListView> list_;
     FolderTree tree_;
     PreviewPane preview_;

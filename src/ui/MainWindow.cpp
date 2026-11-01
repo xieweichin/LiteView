@@ -145,8 +145,9 @@ MainWindow::~MainWindow() {
         settingsState_->changed.notify_one();
     }
     if (settingsThread_.joinable()) settingsThread_.join();
-    // Stop folder loads before the pool goes away.
+    // Stop folder loads and thumbnail work before the pool goes away.
     list_.reset();
+    thumbnails_.reset();
     model_.reset();
     if (pool_) pool_->Shutdown();
 }
@@ -263,6 +264,9 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_APP_FOLDER_LOADED:
         OnFolderLoaded(static_cast<std::uint32_t>(wParam));
         return 0;
+    case WM_APP_THUMB_READY:
+        if (list_) list_->OnThumbnailReady(static_cast<std::uint32_t>(wParam), static_cast<std::uint32_t>(lParam));
+        return 0;
     case WM_APP_TREE_CHILDREN:
         tree_.OnChildrenReady();
         return 0;
@@ -332,6 +336,14 @@ bool MainWindow::OnCreate() {
     if (FAILED(tree_.Create(hwnd_, instance_, kIdTree, hwnd_))) return false;
     if (FAILED(preview_.Create(hwnd_, instance_))) return false;
     if (FAILED(list_->Create(hwnd_, instance_, kIdList))) return false;
+
+    const HWND hwnd = hwnd_;
+    thumbnails_ = std::make_unique<ThumbnailService>(
+        [hwnd](std::uint32_t generation, std::uint32_t itemId, HRESULT) {
+            PostMessageW(hwnd, WM_APP_THUMB_READY, static_cast<WPARAM>(generation), static_cast<LPARAM>(itemId));
+        },
+        ThumbnailService::Options{});
+    list_->SetThumbnailService(thumbnails_.get());
 
     tree_.SetNavigateCallback([this](const std::wstring& path) { Navigate(path); });
     list_->SetColumnClickCallback([this](SortKey key) { OnSortCommand(key); });
@@ -631,6 +643,10 @@ void MainWindow::OnDpiChanged(UINT dpi, const RECT* suggested) {
     if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi_)) {
         font_ = CreateFontIndirectW(&metrics.lfMessageFont);
         if (font_ && pathBar_) SendMessageW(pathBar_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    }
+    if (list_) {
+        list_->SetDpi(dpi);
+        list_->SetViewMode(list_->GetViewMode());
     }
     SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
                  suggested->right - suggested->left, suggested->bottom - suggested->top,
@@ -962,7 +978,7 @@ void MainWindow::OnFolderLoaded(std::uint32_t generation) {
     }
     listFolder_ = pendingFolder_;
     pendingSelect_.clear();
-    list_->Reset(saved);
+    list_->Reset(saved, generation);
     SetStatusText(0, listFolder_);
     UpdateStatus();
 }
@@ -994,6 +1010,17 @@ void MainWindow::UpdateStatus() {
     wchar_t size[32] = {};
     if (selection.count > 0) StrFormatByteSizeW(static_cast<LONGLONG>(selection.bytes), size, ARRAYSIZE(size));
     SetStatusText(3, size);
+    UpdatePreview();
+}
+
+void MainWindow::UpdatePreview() {
+    // Preview the focused picture while it is selected.
+    const int focused = list_->FocusedIndex();
+    std::wstring path;
+    if (focused >= 0 && ListView_GetItemState(list_->Hwnd(), focused, LVIS_SELECTED)) {
+        path = model_->FullPath(static_cast<std::size_t>(focused));
+    }
+    preview_.Show(path);
 }
 
 void MainWindow::SetStatusText(int part, const std::wstring& text) {

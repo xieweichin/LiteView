@@ -11,6 +11,8 @@
 
 #include "core/FolderModel.h"
 
+class ThumbnailService;
+
 // Right-hand file list. A virtual (LVS_OWNERDATA) list view over FolderModel,
 // so a folder with tens of thousands of images costs no per-item allocation
 // in the control.
@@ -24,10 +26,14 @@ public:
     };
 
     explicit FileListView(FolderModel& model) : model_(model) {}
+    ~FileListView();
     FileListView(const FileListView&) = delete;
     FileListView& operator=(const FileListView&) = delete;
 
     HRESULT Create(HWND parent, HINSTANCE instance, UINT controlId);
+    // Thumbnails are drawn in the Thumbnails view when a service is set.
+    void SetThumbnailService(ThumbnailService* service) { thumbnails_ = service; }
+    void SetDpi(UINT dpi);
     HWND Hwnd() const { return hwnd_; }
 
     void SetViewMode(ViewMode mode);
@@ -45,7 +51,10 @@ public:
     // Call after FolderModel::Commit. Restores `saved` by file name, so a
     // re-sort or refresh keeps the selection; with nothing saved, the first
     // item is selected.
-    void Reset(const SavedSelection& saved = SavedSelection());
+    // `generation` tags thumbnail requests so late results for an old folder
+    // are ignored.
+    void Reset(const SavedSelection& saved, std::uint32_t generation);
+    void OnThumbnailReady(std::uint32_t generation, std::uint32_t itemId);
 
     void SelectAll();
     int FocusedIndex() const;
@@ -67,6 +76,9 @@ private:
     const std::wstring& TypeName(const std::wstring& name);
     int IconIndex(const std::wstring& name);
     void AddColumns(HINSTANCE instance);
+    LRESULT OnCustomDraw(NMLVCUSTOMDRAW* draw);
+    void DrawThumbnail(HDC dc, int index);
+    void RebuildThumbnailImageList();
 
     FolderModel& model_;
     HWND hwnd_ = nullptr;
@@ -74,6 +86,11 @@ private:
     HIMAGELIST imageSmall_ = nullptr;
     HIMAGELIST imageLarge_ = nullptr;
     HIMAGELIST imageExtraLarge_ = nullptr;
+    HIMAGELIST imageThumbnail_ = nullptr;  // one blank cell the size of a thumbnail
+    ThumbnailService* thumbnails_ = nullptr;
+    std::uint32_t generation_ = 0;
+    int thumbnailSize_ = 128;
+    std::unordered_map<std::uint32_t, int> indexById_;
     std::unordered_map<std::wstring, std::wstring> typeNames_;  // ".jpg" -> "JPEG 影像"
     std::unordered_map<std::wstring, int> iconIndices_;
     wchar_t textBuffer_[64] = {};

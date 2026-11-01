@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <unordered_set>
 
+#include "core/ThumbnailService.h"
 #include "res/resource.h"
 
 namespace {
@@ -42,12 +43,51 @@ std::wstring LoadStr(HINSTANCE instance, UINT id) {
 
 enum Column { kColName, kColSize, kColType, kColModified };
 
+constexpr int kThumbnailSize = 128;  // 96-DPI pixels
+
 }  // namespace
+
+FileListView::~FileListView() {
+    if (imageThumbnail_) ImageList_Destroy(imageThumbnail_);
+}
+
+void FileListView::SetDpi(UINT dpi) {
+    const int size = MulDiv(kThumbnailSize, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
+    if (size == thumbnailSize_ && imageThumbnail_) return;
+    thumbnailSize_ = size;
+    RebuildThumbnailImageList();
+}
+
+void FileListView::RebuildThumbnailImageList() {
+    // The list view sizes icon cells from the normal image list, so the
+    // Thumbnails view uses one transparent cell and paints over it.
+    HIMAGELIST old = imageThumbnail_;
+    imageThumbnail_ = ImageList_Create(thumbnailSize_, thumbnailSize_, ILC_COLOR32 | ILC_MASK, 1, 0);
+    if (imageThumbnail_) {
+        void* bits = nullptr;
+        BITMAPINFO info = {};
+        info.bmiHeader.biSize = sizeof(info.bmiHeader);
+        info.bmiHeader.biWidth = thumbnailSize_;
+        info.bmiHeader.biHeight = -thumbnailSize_;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        HBITMAP blank = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);  // zeroed
+        // An all-ones mask marks every pixel transparent.
+        std::vector<BYTE> ones(static_cast<std::size_t>((thumbnailSize_ + 15) / 16 * 2) * thumbnailSize_, 0xFF);
+        HBITMAP mask = CreateBitmap(thumbnailSize_, thumbnailSize_, 1, 1, ones.data());
+        if (blank && mask) ImageList_Add(imageThumbnail_, blank, mask);
+        if (blank) DeleteObject(blank);
+        if (mask) DeleteObject(mask);
+    }
+    if (hwnd_ && mode_ == ViewMode::Thumbnails) ListView_SetImageList(hwnd_, imageThumbnail_, LVSIL_NORMAL);
+    if (old) ImageList_Destroy(old);
+}
+
 
 HRESULT FileListView::Create(HWND parent, HINSTANCE instance, UINT controlId) {
     hwnd_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, nullptr,
                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA |
-                                LVS_SHAREIMAGELISTS | LVS_SHOWSELALWAYS | LVS_EDITLABELS,
+                                LVS_SHAREIMAGELISTS | LVS_SHOWSELALWAYS | LVS_EDITLABELS | LVS_AUTOARRANGE,
                             0, 0, 0, 0, parent, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(controlId)),
                             instance, nullptr);
     if (!hwnd_) return HRESULT_FROM_WIN32(GetLastError());
@@ -61,6 +101,7 @@ HRESULT FileListView::Create(HWND parent, HINSTANCE instance, UINT controlId) {
     ListView_SetImageList(hwnd_, imageSmall_, LVSIL_SMALL);
 
     AddColumns(instance);
+    SetDpi(GetDpiForWindow(hwnd_));
     SetViewMode(ViewMode::Details);
     return S_OK;
 }
@@ -88,16 +129,27 @@ void FileListView::AddColumns(HINSTANCE instance) {
 
 void FileListView::SetViewMode(ViewMode mode) {
     mode_ = mode;
-    DWORD view = LV_VIEW_DETAILS;
+    DWORD view = LVS_REPORT;
     HIMAGELIST normal = imageLarge_;
     switch (mode) {
-    case ViewMode::Thumbnails: view = LV_VIEW_ICON; normal = imageExtraLarge_; break;
-    case ViewMode::LargeIcons: view = LV_VIEW_ICON; normal = imageLarge_; break;
-    case ViewMode::List: view = LV_VIEW_LIST; break;
-    case ViewMode::Details: view = LV_VIEW_DETAILS; break;
+    case ViewMode::Thumbnails: view = LVS_ICON; normal = imageThumbnail_ ? imageThumbnail_ : imageExtraLarge_; break;
+    case ViewMode::LargeIcons: view = LVS_ICON; normal = imageLarge_; break;
+    case ViewMode::List: view = LVS_LIST; break;
+    case ViewMode::Details: view = LVS_REPORT; break;
     }
+    if (mode != ViewMode::Thumbnails && thumbnails_) thumbnails_->CancelQueued();
     ListView_SetImageList(hwnd_, normal, LVSIL_NORMAL);
-    ListView_SetView(hwnd_, view);
+    // Switch through the window style: the classic way, which every
+    // list view implementation arranges virtual items for.
+    const LONG_PTR style = GetWindowLongPtrW(hwnd_, GWL_STYLE);
+    SetWindowLongPtrW(hwnd_, GWL_STYLE, (style & ~static_cast<LONG_PTR>(LVS_TYPEMASK)) | view);
+    if (mode == ViewMode::Thumbnails) {
+        const int pad = MulDiv(thumbnailSize_, 1, 5);
+        ListView_SetIconSpacing(hwnd_, thumbnailSize_ + pad, thumbnailSize_ + pad + 2 * GetSystemMetrics(SM_CYMENU));
+    } else if (mode == ViewMode::LargeIcons) {
+        ListView_SetIconSpacing(hwnd_, -1, -1);  // system default
+    }
+    InvalidateRect(hwnd_, nullptr, TRUE);
     const int focused = FocusedIndex();
     if (focused >= 0) ListView_EnsureVisible(hwnd_, focused, FALSE);
 }
@@ -126,11 +178,16 @@ FileListView::SavedSelection FileListView::SaveSelection() const {
     return saved;
 }
 
-void FileListView::Reset(const SavedSelection& saved) {
+void FileListView::Reset(const SavedSelection& saved, std::uint32_t generation) {
+    if (generation != generation_ && thumbnails_) thumbnails_->CancelQueued();
+    generation_ = generation;
     SendMessageW(hwnd_, WM_SETREDRAW, FALSE, 0);
     ListView_SetItemState(hwnd_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     const std::size_t count = model_.Count();
     ListView_SetItemCountEx(hwnd_, static_cast<int>(count), 0);
+    indexById_.clear();
+    indexById_.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) indexById_[model_.At(i).id] = static_cast<int>(i);
 
     int focus = -1;
     bool anySelected = false;
@@ -214,7 +271,7 @@ void FileListView::OnGetDispInfo(NMLVDISPINFOW* info) {
     LVITEMW& item = info->item;
     if (item.iItem < 0 || static_cast<std::size_t>(item.iItem) >= model_.Count()) return;
     const FileItem& file = model_.At(static_cast<std::size_t>(item.iItem));
-    if (item.mask & LVIF_IMAGE) item.iImage = IconIndex(file.name);
+    if (item.mask & LVIF_IMAGE) item.iImage = mode_ == ViewMode::Thumbnails ? 0 : IconIndex(file.name);
     if (!(item.mask & LVIF_TEXT) || !item.pszText || item.cchTextMax <= 0) return;
 
     switch (item.iSubItem) {
@@ -292,7 +349,7 @@ bool FileListView::OnNotify(NMHDR* header, LRESULT& result) {
     }
     case LVN_ITEMCHANGED: {
         auto* nm = reinterpret_cast<NMLISTVIEW*>(header);
-        if ((nm->uChanged & LVIF_STATE) && ((nm->uOldState ^ nm->uNewState) & LVIS_SELECTED)) {
+        if ((nm->uChanged & LVIF_STATE) && ((nm->uOldState ^ nm->uNewState) & (LVIS_SELECTED | LVIS_FOCUSED))) {
             if (onSelectionChanged_) onSelectionChanged_();
         }
         return true;
@@ -300,9 +357,90 @@ bool FileListView::OnNotify(NMHDR* header, LRESULT& result) {
     case LVN_ODSTATECHANGED:
         if (onSelectionChanged_) onSelectionChanged_();
         return true;
+    case NM_CUSTOMDRAW:
+        result = OnCustomDraw(reinterpret_cast<NMLVCUSTOMDRAW*>(header));
+        return true;
+    case LVN_BEGINSCROLL:
+        // Items scrolled out of view no longer need thumbnails; visible
+        // ones are requested again as they paint.
+        if (thumbnails_) thumbnails_->CancelQueued();
+        return true;
     case LVN_BEGINLABELEDITW:
         result = TRUE;  // in-place rename arrives with T7
         return true;
     }
     return false;
+}
+
+LRESULT FileListView::OnCustomDraw(NMLVCUSTOMDRAW* draw) {
+    if (mode_ != ViewMode::Thumbnails || !thumbnails_) return CDRF_DODEFAULT;
+    switch (draw->nmcd.dwDrawStage) {
+    case CDDS_PREPAINT:
+        return CDRF_NOTIFYITEMDRAW;
+    case CDDS_ITEMPREPAINT:
+        return CDRF_NOTIFYPOSTPAINT;
+    case CDDS_ITEMPOSTPAINT:
+        DrawThumbnail(draw->nmcd.hdc, static_cast<int>(draw->nmcd.dwItemSpec));
+        return CDRF_DODEFAULT;
+    }
+    return CDRF_DODEFAULT;
+}
+
+void FileListView::DrawThumbnail(HDC dc, int index) {
+    if (index < 0 || static_cast<std::size_t>(index) >= model_.Count()) return;
+    RECT cell{};
+    if (!ListView_GetItemRect(hwnd_, index, &cell, LVIR_ICON)) return;
+    const FileItem& file = model_.At(static_cast<std::size_t>(index));
+
+    ThumbnailRequest request;
+    request.generation = generation_;
+    request.itemId = file.id;
+    request.path = model_.FullPath(static_cast<std::size_t>(index));
+    request.modified = file.modified;
+    request.fileSize = file.size;
+    request.size = static_cast<UINT>(thumbnailSize_);
+
+    bool failed = false;
+    ThumbnailPtr thumbnail = thumbnails_->TryGetCached(request, &failed);
+    const int cellW = cell.right - cell.left;
+    const int cellH = cell.bottom - cell.top;
+    if (thumbnail) {
+        const double scale = std::min({1.0, static_cast<double>(cellW) / thumbnail->width,
+                                       static_cast<double>(cellH) / thumbnail->height});
+        const int w = std::max(1, static_cast<int>(thumbnail->width * scale + 0.5));
+        const int h = std::max(1, static_cast<int>(thumbnail->height * scale + 0.5));
+        const int x = cell.left + (cellW - w) / 2;
+        const int y = cell.top + (cellH - h) / 2;
+        HDC memory = CreateCompatibleDC(dc);
+        HGDIOBJ old = SelectObject(memory, thumbnail->bitmap);
+        if (w == static_cast<int>(thumbnail->width) && h == static_cast<int>(thumbnail->height)) {
+            BitBlt(dc, x, y, w, h, memory, 0, 0, SRCCOPY);
+        } else {
+            SetStretchBltMode(dc, HALFTONE);
+            SetBrushOrgEx(dc, 0, 0, nullptr);
+            StretchBlt(dc, x, y, w, h, memory, 0, 0, static_cast<int>(thumbnail->width),
+                       static_cast<int>(thumbnail->height), SRCCOPY);
+        }
+        SelectObject(memory, old);
+        DeleteDC(memory);
+        // Thin frame so white pictures do not melt into the background.
+        RECT frame{x - 1, y - 1, x + w + 1, y + h + 1};
+        FrameRect(dc, &frame, GetSysColorBrush(COLOR_BTNSHADOW));
+        return;
+    }
+    // Not ready: the file-type icon stands in.
+    int iconW = 0, iconH = 0;
+    if (imageExtraLarge_ && ImageList_GetIconSize(imageExtraLarge_, &iconW, &iconH)) {
+        ImageList_Draw(imageExtraLarge_, IconIndex(file.name), dc, cell.left + (cellW - iconW) / 2,
+                       cell.top + (cellH - iconH) / 2, ILD_TRANSPARENT);
+    }
+    if (!failed) thumbnails_->Request(request, true);
+}
+
+void FileListView::OnThumbnailReady(std::uint32_t generation, std::uint32_t itemId) {
+    if (generation != generation_ || mode_ != ViewMode::Thumbnails) return;
+    auto it = indexById_.find(itemId);
+    if (it == indexById_.end()) return;
+    RECT rc{};
+    if (ListView_GetItemRect(hwnd_, it->second, &rc, LVIR_ICON)) InvalidateRect(hwnd_, &rc, FALSE);
 }

@@ -1,7 +1,78 @@
 #include "ui/PreviewPane.h"
 
+#include <wincodec.h>
+#include <wrl/client.h>
+
+#include <algorithm>
+
+#include "core/ImageDecoder.h"
+#include "core/ThreadPool.h"
+#include "ui/Messages.h"
+
+using Microsoft::WRL::ComPtr;
+
 namespace {
+
 constexpr wchar_t kClassName[] = L"LiteViewPreviewPane";
+constexpr UINT_PTR kDebounceTimer = 1;
+constexpr UINT kDebounceMs = 60;
+
+struct ThreadCom {
+    HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    ~ThreadCom() { if (SUCCEEDED(result)) CoUninitialize(); }
+};
+
+HRESULT DecodeFitted(const std::wstring& path, UINT boxWidth, UINT boxHeight, HBITMAP& bitmap, UINT& width,
+                     UINT& height) {
+    ImageDecoder decoder;
+    DecodedImage image;
+    HRESULT hr = decoder.Decode(path, std::max(boxWidth, boxHeight), image);
+    if (FAILED(hr)) return hr;
+    width = image.width;
+    height = image.height;
+    ComPtr<IWICBitmapSource> source = image.bitmap;
+    if (width > boxWidth || height > boxHeight) {
+        const double scale = std::min(static_cast<double>(boxWidth) / width, static_cast<double>(boxHeight) / height);
+        width = std::max<UINT>(1, static_cast<UINT>(width * scale + 0.5));
+        height = std::max<UINT>(1, static_cast<UINT>(height * scale + 0.5));
+        ComPtr<IWICImagingFactory> factory;
+        hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+        ComPtr<IWICBitmapScaler> scaler;
+        if (SUCCEEDED(hr)) hr = factory->CreateBitmapScaler(&scaler);
+        if (SUCCEEDED(hr)) hr = scaler->Initialize(image.bitmap.Get(), width, height, WICBitmapInterpolationModeFant);
+        if (FAILED(hr)) return hr;
+        source = scaler;
+    }
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = static_cast<LONG>(width);
+    info.bmiHeader.biHeight = -static_cast<LONG>(height);
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bitmap || !bits) return E_OUTOFMEMORY;
+    hr = source->CopyPixels(nullptr, width * 4, width * 4 * height, static_cast<BYTE*>(bits));
+    if (FAILED(hr)) {
+        DeleteObject(bitmap);
+        bitmap = nullptr;
+    }
+    GdiFlush();
+    return hr;
+}
+
+}  // namespace
+
+PreviewPane::PreviewPane() : shared_(std::make_shared<Shared>()), pool_(std::make_unique<ThreadPool>(1)) {}
+
+PreviewPane::~PreviewPane() {
+    {
+        std::lock_guard<std::mutex> lock(shared_->mutex);
+        shared_->hwnd = nullptr;
+    }
+    pool_->Shutdown();
+    if (shared_->bitmap) DeleteObject(shared_->bitmap);
 }
 
 HRESULT PreviewPane::Create(HWND parent, HINSTANCE instance) {
@@ -18,7 +89,10 @@ HRESULT PreviewPane::Create(HWND parent, HINSTANCE instance) {
     }
     hwnd_ = CreateWindowExW(WS_EX_CLIENTEDGE, kClassName, nullptr, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0,
                             parent, nullptr, instance, this);
-    return hwnd_ ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    if (!hwnd_) return HRESULT_FROM_WIN32(GetLastError());
+    std::lock_guard<std::mutex> lock(shared_->mutex);
+    shared_->hwnd = hwnd_;
+    return S_OK;
 }
 
 LRESULT CALLBACK PreviewPane::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -31,6 +105,10 @@ LRESULT CALLBACK PreviewPane::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         self = reinterpret_cast<PreviewPane*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     }
     if (msg == WM_NCDESTROY && self) {
+        {
+            std::lock_guard<std::mutex> lock(self->shared_->mutex);
+            self->shared_->hwnd = nullptr;
+        }
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         self->hwnd_ = nullptr;
         return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -45,13 +123,126 @@ LRESULT PreviewPane::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_ERASEBKGND:
         return 1;
+    case WM_SIZE: {
+        // Re-decode when the pane grows past what the current image was made for.
+        const int w = LOWORD(lParam), h = HIWORD(lParam);
+        if (!path_.empty() && (w > decodedFor_.cx || h > decodedFor_.cy)) {
+            SetTimer(hwnd_, kDebounceTimer, kDebounceMs * 3, nullptr);
+        }
+        return 0;
+    }
+    case WM_TIMER:
+        if (wParam == kDebounceTimer) {
+            KillTimer(hwnd_, kDebounceTimer);
+            StartDecode();
+            return 0;
+        }
+        break;
+    case WM_APP_PREVIEW_READY:
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return 0;
     }
     return DefWindowProcW(hwnd_, msg, wParam, lParam);
+}
+
+void PreviewPane::Show(const std::wstring& path) {
+    if (path == path_) return;
+    path_ = path;
+    {
+        // Invalidate any decode in flight; keep showing the old picture
+        // until the new one is ready, unless the pane is being cleared.
+        std::lock_guard<std::mutex> lock(shared_->mutex);
+        ++shared_->token;
+        if (path.empty() && shared_->bitmap) {
+            DeleteObject(shared_->bitmap);
+            shared_->bitmap = nullptr;
+        }
+    }
+    pool_->CancelPending();
+    if (path.empty()) {
+        KillTimer(hwnd_, kDebounceTimer);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+    SetTimer(hwnd_, kDebounceTimer, kDebounceMs, nullptr);
+}
+
+void PreviewPane::StartDecode() {
+    if (path_.empty()) return;
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    const UINT margin = 4;
+    if (rc.right <= static_cast<LONG>(2 * margin) || rc.bottom <= static_cast<LONG>(2 * margin)) return;
+    decodedFor_ = SIZE{rc.right, rc.bottom};
+    unsigned token;
+    {
+        std::lock_guard<std::mutex> lock(shared_->mutex);
+        token = ++shared_->token;
+    }
+    pool_->CancelPending();
+    const auto shared = shared_;
+    const std::wstring path = path_;
+    const UINT w = static_cast<UINT>(rc.right) - 2 * margin;
+    const UINT h = static_cast<UINT>(rc.bottom) - 2 * margin;
+    pool_->Submit([shared, token, path, w, h] { Decode(shared, token, path, w, h); });
+}
+
+void PreviewPane::Decode(const std::shared_ptr<Shared>& shared, unsigned token, std::wstring path, UINT boxWidth,
+                         UINT boxHeight) noexcept {
+    {
+        std::lock_guard<std::mutex> lock(shared->mutex);
+        if (shared->token != token) return;
+    }
+    thread_local ThreadCom com;
+    HBITMAP bitmap = nullptr;
+    UINT width = 0, height = 0;
+    const HRESULT hr = (SUCCEEDED(com.result) || com.result == RPC_E_CHANGED_MODE)
+                           ? DecodeFitted(path, boxWidth, boxHeight, bitmap, width, height)
+                           : com.result;
+    std::lock_guard<std::mutex> lock(shared->mutex);
+    if (shared->token != token) {
+        if (bitmap) DeleteObject(bitmap);
+        return;
+    }
+    if (shared->bitmap) DeleteObject(shared->bitmap);
+    shared->bitmap = SUCCEEDED(hr) ? bitmap : nullptr;  // a broken file shows an empty pane
+    shared->width = width;
+    shared->height = height;
+    shared->bitmapToken = token;
+    if (shared->hwnd) PostMessageW(shared->hwnd, WM_APP_PREVIEW_READY, 0, 0);
 }
 
 void PreviewPane::OnPaint() {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(hwnd_, &ps);
-    FillRect(dc, &ps.rcPaint, GetSysColorBrush(COLOR_APPWORKSPACE));
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP canvas = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+    HGDIOBJ oldCanvas = SelectObject(memory, canvas);
+    FillRect(memory, &rc, GetSysColorBrush(COLOR_APPWORKSPACE));
+    {
+        std::lock_guard<std::mutex> lock(shared_->mutex);
+        if (shared_->bitmap && !path_.empty()) {
+            // Fit (never enlarge) and centre.
+            const UINT w = shared_->width, h = shared_->height;
+            const double scale = std::min({1.0, static_cast<double>(rc.right) / w, static_cast<double>(rc.bottom) / h});
+            const int dw = std::max(1, static_cast<int>(w * scale + 0.5));
+            const int dh = std::max(1, static_cast<int>(h * scale + 0.5));
+            const int x = (rc.right - dw) / 2;
+            const int y = (rc.bottom - dh) / 2;
+            HDC source = CreateCompatibleDC(dc);
+            HGDIOBJ old = SelectObject(source, shared_->bitmap);
+            BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+            SetStretchBltMode(memory, HALFTONE);
+            AlphaBlend(memory, x, y, dw, dh, source, 0, 0, static_cast<int>(w), static_cast<int>(h), blend);
+            SelectObject(source, old);
+            DeleteDC(source);
+        }
+    }
+    BitBlt(dc, 0, 0, rc.right, rc.bottom, memory, 0, 0, SRCCOPY);
+    SelectObject(memory, oldCanvas);
+    DeleteObject(canvas);
+    DeleteDC(memory);
     EndPaint(hwnd_, &ps);
 }
