@@ -2,6 +2,7 @@
 
 #include <commctrl.h>
 #include <knownfolders.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
 #include <shobjidl.h>
@@ -17,6 +18,7 @@
 
 #include "core/BatchRename.h"
 #include "core/FileOps.h"
+#include "core/FormatSupport.h"
 #include "core/Rotator.h"
 #include "core/Settings.h"
 #include "core/ThreadPool.h"
@@ -850,12 +852,20 @@ bool MainWindow::OnSetCursor() {
     GetCursorPos(&pt);
     ScreenToClient(hwnd_, &pt);
     const Splitter hit = dragging_ != Splitter::None ? dragging_ : HitTestSplitter(pt);
-    if (hit == Splitter::None) return false;
+    if (hit == Splitter::None) {
+        if (!StatusHintHit(pt)) return false;
+        SetCursor(LoadCursorW(nullptr, IDC_HAND));
+        return true;
+    }
     SetCursor(LoadCursorW(nullptr, hit == Splitter::Vertical ? IDC_SIZEWE : IDC_SIZENS));
     return true;
 }
 
 void MainWindow::OnLButtonDown(POINT pt) {
+    if (StatusHintHit(pt)) {
+        OpenCodecStore(codecHintPacks_);
+        return;
+    }
     dragging_ = HitTestSplitter(pt);
     if (dragging_ == Splitter::None) return;
     RECT treeRect{};
@@ -1015,6 +1025,9 @@ void MainWindow::OnCommand(UINT id) {
     case IDM_BAR_VIEW:
     case IDM_BAR_MORE:
         ShowBarMenu(id, false);
+        break;
+    case IDM_HELP_CODECS:
+        ShowCodecInfo();
         break;
     case IDM_HELP_ABOUT: {
         const std::wstring text = LoadStr(IDS_ABOUT_TEXT);
@@ -1440,7 +1453,7 @@ void MainWindow::OnFolderLoaded(std::uint32_t generation) {
         if (count > 0) list_->SelectOnly(std::min(selectIndexAfterLoad_, count - 1));
         selectIndexAfterLoad_ = -1;
     }
-    SetStatusText(0, listFolder_);
+    ShowFolderStatus();
     UpdateStatus();
     if (openViewerOnLoad_) {
         openViewerOnLoad_ = false;
@@ -1493,6 +1506,59 @@ void MainWindow::UpdatePreview() {
         path = model_->FullPath(static_cast<std::size_t>(focused));
     }
     preview_.Show(path);
+}
+
+void MainWindow::ShowFolderStatus() {
+    const CodecGap gap = model_->MissingCodecs();
+    codecHint_.clear();
+    codecHintPacks_ = gap.files ? gap.packs : 0;
+    if (!codecHintPacks_) {
+        SetStatusText(0, listFolder_);
+        return;
+    }
+    std::wstring names;
+    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(CodecPack::Count); ++i) {
+        const auto pack = static_cast<CodecPack>(i);
+        if (!(codecHintPacks_ & CodecPackBit(pack))) continue;
+        if (!names.empty()) names += LoadStr(IDS_LIST_SEPARATOR);
+        names += CodecPackName(pack);
+    }
+    codecHint_ = Format(Format(LoadStr(IDS_STATUS_CODEC_HINT), gap.files), names);
+    SetStatusText(0, codecHint_);
+}
+
+bool MainWindow::StatusHintHit(POINT client) const {
+    // Only while the hint is what the status line shows (other messages replace it).
+    if (!codecHintPacks_ || codecHint_.empty() || statusText_[0] != codecHint_) return false;
+    if (dragging_ != Splitter::None || !PtInRect(&statusRect_, client)) return false;
+    return client.x < statusRect_.left + (statusRect_.right - statusRect_.left) / 2;
+}
+
+void MainWindow::OpenCodecStore(std::uint32_t packs) {
+    const CodecPack pack = FirstCodecPack(packs);
+    if (pack == CodecPack::Count) return;
+    ShellExecuteW(hwnd_, L"open", CodecPackStoreUri(pack), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+void MainWindow::ShowCodecInfo() {
+    // Enumerating WIC decoders reads a few registry keys: fine for a menu command.
+    std::vector<std::wstring> extensions;
+    const HRESULT hr = DecoderExtensions(extensions);
+    const std::uint32_t missing = SUCCEEDED(hr) ? MissingCodecPacks(extensions) : 0;
+    const std::wstring title = LoadStr(IDS_CODECS_TITLE);
+    if (!missing) {
+        MessageBoxW(hwnd_, LoadStr(IDS_CODECS_ALL_INSTALLED).c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    std::wstring names;
+    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(CodecPack::Count); ++i) {
+        const auto pack = static_cast<CodecPack>(i);
+        if (!(missing & CodecPackBit(pack))) continue;
+        if (!names.empty()) names += LoadStr(IDS_LIST_SEPARATOR);
+        names += CodecPackName(pack);
+    }
+    const std::wstring text = Format(Format(LoadStr(IDS_CODECS_MISSING), names), CodecPackName(FirstCodecPack(missing)));
+    if (MessageBoxW(hwnd_, text.c_str(), title.c_str(), MB_YESNO | MB_ICONQUESTION) == IDYES) OpenCodecStore(missing);
 }
 
 void MainWindow::SetStatusText(int part, const std::wstring& text) {
@@ -1559,7 +1625,7 @@ void MainWindow::ExitViewer() {
     if (index >= 0) list_->SelectOnly(index);
     SetFocus(list_->Hwnd());
     SetWindowTextW(hwnd_, LoadStr(IDS_APP_TITLE).c_str());
-    SetStatusText(0, listFolder_);
+    ShowFolderStatus();
     UpdateStatus();
 }
 

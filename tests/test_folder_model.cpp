@@ -1,6 +1,9 @@
 #include "doctest.h"
 
 #include "core/FolderModel.h"
+#include "core/FormatSupport.h"
+
+#include <objbase.h>
 
 #include <atomic>
 #include <chrono>
@@ -144,6 +147,43 @@ TEST_CASE("folder listing filters WIC extensions and sorts in the background") {
     CHECK(model.At(0).name == L"img10.jpg");
     CHECK(model.At(1).name == L"img2.JPG");
     CHECK(model.At(2).name == L"alpha.png");
+}
+
+TEST_CASE("files that need a missing codec extension are counted, not listed") {
+    FolderFixture fixture;
+    fixture.AddFile(fixture.first, L"a.jpg", 1, 132537600000000000ULL);
+    fixture.AddFile(fixture.first, L"b.heic", 1, 132537600000000000ULL);
+    fixture.AddFile(fixture.first, L"c.CR3", 1, 132537600000000000ULL);
+    fixture.AddFile(fixture.first, L"d.txt", 1, 132537600000000000ULL);
+
+    // Expectations depend on the codecs installed on the test machine.
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    std::vector<std::wstring> extensions;
+    REQUIRE(DecoderExtensions(extensions) == S_OK);
+    if (SUCCEEDED(init)) CoUninitialize();
+    const bool heic = HasExtension(extensions, L".heic");
+    const bool cr3 = HasExtension(extensions, L".cr3");
+
+    Notifications notifications;
+    FolderModel model;
+    const auto generation = model.Open(fixture.first, [&](std::uint32_t value) { notifications.Signal(value); });
+    REQUIRE(generation != 0);
+    REQUIRE(notifications.Wait(1));
+    REQUIRE(model.Commit(generation) == S_OK);
+    CHECK(model.Count() == 1u + (heic ? 1u : 0u) + (cr3 ? 1u : 0u));
+    CodecGap gap = model.MissingCodecs();
+    CHECK(gap.files == (heic ? 0u : 1u) + (cr3 ? 0u : 1u));
+    CHECK(((gap.packs & CodecPackBit(CodecPack::Heif)) != 0) == !heic);
+    CHECK(((gap.packs & CodecPackBit(CodecPack::Raw)) != 0) == !cr3);
+    CHECK((gap.packs & CodecPackBit(CodecPack::WebP)) == 0);
+
+    // Re-sorting keeps the count.
+    model.Sort(SortKey::Size, true);
+    REQUIRE(notifications.Wait(2));
+    REQUIRE(model.Commit(generation) == S_OK);
+    const CodecGap sorted = model.MissingCodecs();
+    CHECK(sorted.files == gap.files);
+    CHECK(sorted.packs == gap.packs);
 }
 
 TEST_CASE("opening a newer folder suppresses an older queued callback") {

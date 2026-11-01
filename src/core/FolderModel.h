@@ -18,6 +18,13 @@ struct FileItem {
     std::uint32_t id = 0;
 };
 
+// Files in a folder that are a known image format whose Windows codec
+// extension is not installed (see core/FormatSupport.h). They are not listed.
+struct CodecGap {
+    std::size_t files = 0;
+    std::uint32_t packs = 0;  // CodecPackBit flags
+};
+
 enum class SortKey { Name, Size, Type, Modified };
 
 // Open and Sort perform filesystem work and sorting on worker threads. The
@@ -43,6 +50,7 @@ public:
     HRESULT Commit(std::uint32_t generation) noexcept;
     HRESULT LastResult() const noexcept;
 
+    CodecGap MissingCodecs() const noexcept;  // of the committed folder
     std::size_t Count() const noexcept;
     const FileItem& At(std::size_t index) const noexcept;
     std::wstring FullPath(std::size_t index) const noexcept;
@@ -53,10 +61,10 @@ private:
                      std::uint32_t generation) noexcept;
     static void SortCopy(const std::shared_ptr<State>& state,
                          std::shared_ptr<const std::vector<FileItem>> source,
-                         std::wstring path, std::uint32_t generation) noexcept;
+                         std::wstring path, std::uint32_t generation, CodecGap gap) noexcept;
     static void Finish(const std::shared_ptr<State>& state, std::wstring path,
                        std::uint32_t generation, HRESULT result,
-                       std::vector<FileItem> items) noexcept;
+                       std::vector<FileItem> items, CodecGap gap) noexcept;
 
     std::shared_ptr<State> state_;
     std::shared_ptr<ThreadPool> pool_;

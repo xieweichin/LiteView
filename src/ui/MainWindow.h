@@ -87,6 +87,10 @@ private:
     void UpdateStatus();
     void UpdatePreview();
     void SetStatusText(int part, const std::wstring& text);
+    void ShowFolderStatus();           // folder path, or the missing-codec hint
+    bool StatusHintHit(POINT client) const;
+    void OpenCodecStore(std::uint32_t packs);
+    void ShowCodecInfo();
 
     // Viewer
     void EnterViewer(int index);
@@ -149,6 +153,8 @@ private:
     RECT fieldRect_{};       // rounded box drawn around the path bar
     RECT statusRect_{};
     std::wstring statusText_[4];  // message | file count | selection | selection size
+    std::wstring codecHint_;      // status message that opens the Store when clicked
+    std::uint32_t codecHintPacks_ = 0;
     HMENU moreMenu_ = nullptr;    // the full menu, opened from "..." or Alt
     HMENU viewMenu_ = nullptr;    // view modes, opened from the "View" button
     HMENU sortMenu_ = nullptr;    // submenu of moreMenu_, not owned

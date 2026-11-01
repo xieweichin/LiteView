@@ -38,6 +38,7 @@ endif()
 # ---- Core layer (no UI, unit tested) -----------------------------------------
 add_library(LiteViewCore STATIC
     src/core/FolderModel.cpp
+    src/core/FormatSupport.cpp
     src/core/ImageDecoder.cpp
     src/core/Metadata.cpp
     src/core/Settings.cpp

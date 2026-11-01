@@ -88,3 +88,11 @@
 #define IDS_BAR_BROWSE              1501
 #define IDS_BAR_SORT                1502
 #define IDS_BAR_VIEW                1503
+
+// Image format extensions (codec packs)
+#define IDS_STATUS_CODEC_HINT       1600
+#define IDS_CODECS_ALL_INSTALLED    1601
+#define IDS_CODECS_MISSING          1602
+#define IDS_CODECS_TITLE            1603
+#define IDS_VIEWER_ERROR_HEIF       1604
+#define IDS_LIST_SEPARATOR          1605

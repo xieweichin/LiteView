@@ -1,9 +1,11 @@
 #include "ui/ViewerView.h"
 
+#include <shlwapi.h>
 #include <windowsx.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cwchar>
 
 #include "res/resource.h"
 #include "ui/Theme.h"
@@ -409,7 +411,11 @@ void ViewerView::OnPaint() {
     if (failed_) {
         // The message is drawn with GDI after Direct2D has presented.
         HDC dc = GetDC(hwnd_);
-        const std::wstring text = LoadStr(IDS_VIEWER_ERROR);
+        // HEIC needs the HEVC codec as well as the HEIF one; say so.
+        const wchar_t* extension = PathFindExtensionW(path_.c_str());
+        const bool heif = _wcsicmp(extension, L".heic") == 0 || _wcsicmp(extension, L".heif") == 0 ||
+                          _wcsicmp(extension, L".hif") == 0;
+        const std::wstring text = LoadStr(heif ? IDS_VIEWER_ERROR_HEIF : IDS_VIEWER_ERROR);
         RECT rc{0, 0, view.cx, view.cy};
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, fullscreen_ ? RGB(220, 220, 220) : theme::Current().text);
