@@ -43,7 +43,8 @@ std::wstring Join(const std::wstring& directory, const wchar_t* name) {
 bool ValidKey(const std::wstring& section, const std::wstring& key) {
     return !section.empty() && !key.empty() &&
            section.find_first_of(L"[]\r\n") == std::wstring::npos &&
-           key.find_first_of(L"=\r\n") == std::wstring::npos;
+           key.find_first_of(L"=\r\n") == std::wstring::npos &&
+           section.find(L'\0') == std::wstring::npos && key.find(L'\0') == std::wstring::npos;
 }
 
 HRESULT WriteBytes(HANDLE handle, const void* buffer, DWORD length) {
@@ -83,6 +84,45 @@ HRESULT DecodeExistingFile(const std::vector<BYTE>& bytes, std::wstring& text) {
     text.resize(static_cast<std::size_t>(needed));
     if (MultiByteToWideChar(codePage, flags, input, length, text.data(), needed) == 0) return LastError();
     return S_OK;
+}
+
+std::wstring TrimIni(const std::wstring& text) {
+    const auto first = text.find_first_not_of(L" \t");
+    if (first == std::wstring::npos) return {};
+    const auto last = text.find_last_not_of(L" \t");
+    return text.substr(first, last - first + 1);
+}
+
+std::wstring ReadDecodedIni(const std::wstring& text, const std::wstring& section,
+                            const std::wstring& key, const std::wstring& fallback) {
+    bool inSection = false;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const auto end = text.find_first_of(L"\r\n", start);
+        const std::wstring line = TrimIni(text.substr(start, end == std::wstring::npos ? end : end - start));
+        if (!line.empty() && line.front() != L';' && line.front() != L'#') {
+            if (line.front() == L'[') {
+                const auto close = line.find(L']');
+                inSection = close != std::wstring::npos &&
+                            _wcsicmp(TrimIni(line.substr(1, close - 1)).c_str(), section.c_str()) == 0;
+            } else if (inSection) {
+                const auto equals = line.find(L'=');
+                if (equals != std::wstring::npos &&
+                    _wcsicmp(TrimIni(line.substr(0, equals)).c_str(), key.c_str()) == 0) {
+                    std::wstring value = TrimIni(line.substr(equals + 1));
+                    if (value.size() >= 2 && (value.front() == L'\'' || value.front() == L'"') &&
+                        value.back() == value.front()) {
+                        value = value.substr(1, value.size() - 2);
+                    }
+                    return value;
+                }
+            }
+        }
+        if (end == std::wstring::npos) break;
+        start = end + 1;
+        if (text[end] == L'\r' && start < text.size() && text[start] == L'\n') ++start;
+    }
+    return fallback;
 }
 
 std::atomic<unsigned long> temporarySequence{0};
@@ -239,6 +279,44 @@ HRESULT Settings::ReadString(const std::wstring& section, const std::wstring& ke
     try {
         std::lock_guard<std::mutex> lock(mutex_);
         if (path_.empty()) return E_UNEXPECTED;
+        FileHandle source(CreateFileW(path_.c_str(), GENERIC_READ,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+        if (!source.Valid()) {
+            const DWORD error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+                value = fallback;
+                return S_OK;
+            }
+            return HRESULT_FROM_WIN32(error);
+        }
+        BYTE prefix[3]{};
+        DWORD prefixSize = 0;
+        if (!ReadFile(source.Get(), prefix, sizeof(prefix), &prefixSize, nullptr)) return LastError();
+        const bool utf8 = prefixSize >= 3 && prefix[0] == 0xEF && prefix[1] == 0xBB && prefix[2] == 0xBF;
+        const bool utf16be = prefixSize >= 2 && prefix[0] == 0xFE && prefix[1] == 0xFF;
+        if (utf8 || utf16be) {
+            LARGE_INTEGER size{};
+            if (!GetFileSizeEx(source.Get(), &size)) return LastError();
+            if (size.QuadPart < 0 || size.QuadPart > 8 * 1024 * 1024) return HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE);
+            LARGE_INTEGER zero{};
+            if (!SetFilePointerEx(source.Get(), zero, nullptr, FILE_BEGIN)) return LastError();
+            std::vector<BYTE> bytes(static_cast<std::size_t>(size.QuadPart));
+            DWORD offset = 0;
+            while (offset < bytes.size()) {
+                DWORD read = 0;
+                if (!ReadFile(source.Get(), bytes.data() + offset,
+                              static_cast<DWORD>(bytes.size() - offset), &read, nullptr)) return LastError();
+                if (read == 0) return HRESULT_FROM_WIN32(ERROR_HANDLE_EOF);
+                offset += read;
+            }
+            std::wstring text;
+            const HRESULT hr = DecodeExistingFile(bytes, text);
+            if (FAILED(hr)) return hr;
+            value = ReadDecodedIni(text, section, key, fallback);
+            return S_OK;
+        }
+        source.Close();
         std::vector<wchar_t> buffer(256);
         for (;;) {
             const DWORD length = GetPrivateProfileStringW(section.c_str(), key.c_str(), fallback.c_str(),
@@ -260,7 +338,8 @@ HRESULT Settings::ReadString(const std::wstring& section, const std::wstring& ke
 
 HRESULT Settings::WriteString(const std::wstring& section, const std::wstring& key,
                               const std::wstring& value) noexcept {
-    if (!ValidKey(section, key) || value.find_first_of(L"\r\n") != std::wstring::npos) return E_INVALIDARG;
+    if (!ValidKey(section, key) || value.find_first_of(L"\r\n") != std::wstring::npos ||
+        value.find(L'\0') != std::wstring::npos) return E_INVALIDARG;
     try {
         std::lock_guard<std::mutex> lock(mutex_);
         const HRESULT hr = EnsureUnicodeFile();

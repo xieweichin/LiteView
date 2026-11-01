@@ -60,6 +60,17 @@ struct SettingsFixture {
         CloseHandle(file);
         return ok && read == sizeof(bom) && bom[0] == 0xFF && bom[1] == 0xFE;
     }
+
+    bool HasUtf8Bom(const std::wstring& path) {
+        HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return false;
+        unsigned char bom[3]{};
+        DWORD read = 0;
+        const BOOL ok = ReadFile(file, bom, sizeof(bom), &read, nullptr);
+        CloseHandle(file);
+        return ok && read == sizeof(bom) && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF;
+    }
 };
 
 }  // namespace
@@ -130,6 +141,10 @@ TEST_CASE("existing UTF-8 portable settings are converted without losing text") 
     fixture.WriteFile(path, bytes);
     Settings settings;
     REQUIRE(Settings::FromDirectories(fixture.executable, fixture.roaming, settings) == S_OK);
+    std::wstring beforeWrite;
+    CHECK(settings.ReadString(L"General", L"Old", L"", beforeWrite) == S_OK);
+    CHECK(beforeWrite == L"臺灣");
+    CHECK(fixture.HasUtf8Bom(path));
     REQUIRE(settings.WriteString(L"General", L"New", L"八德") == S_OK);
     CHECK(fixture.HasUtf16Bom(path));
     std::wstring old;
@@ -138,6 +153,27 @@ TEST_CASE("existing UTF-8 portable settings are converted without losing text") 
     CHECK(settings.ReadString(L"General", L"New", L"", added) == S_OK);
     CHECK(old == L"臺灣");
     CHECK(added == L"八德");
+}
+
+TEST_CASE("UTF-16 big-endian settings are readable and safely converted") {
+    SettingsFixture fixture;
+    const std::wstring path = fixture.executable + L"\\portable.ini";
+    const std::wstring content = L"[General]\r\nOld=臺灣\r\n";
+    std::vector<unsigned char> bytes{0xFE, 0xFF};
+    for (wchar_t character : content) {
+        bytes.push_back(static_cast<unsigned char>((character >> 8) & 0xFF));
+        bytes.push_back(static_cast<unsigned char>(character & 0xFF));
+    }
+    fixture.WriteFile(path, bytes);
+    Settings settings;
+    REQUIRE(Settings::FromDirectories(fixture.executable, fixture.roaming, settings) == S_OK);
+    std::wstring value;
+    CHECK(settings.ReadString(L"General", L"Old", L"", value) == S_OK);
+    CHECK(value == L"臺灣");
+    REQUIRE(settings.WriteInt(L"General", L"Count", 2) == S_OK);
+    CHECK(fixture.HasUtf16Bom(path));
+    CHECK(settings.ReadString(L"General", L"Old", L"", value) == S_OK);
+    CHECK(value == L"臺灣");
 }
 
 TEST_CASE("malformed settings use fallbacks and report an error") {
