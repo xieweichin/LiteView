@@ -235,6 +235,10 @@ BEGIN
     IDS_CODECS_MISSING      "這台電腦還不能預覽：%s\n\n這些格式由 Windows 解碼，需要從 Microsoft Store 安裝對應的影像延伸模組（多數免費；HEIC 照片另需 HEVC 視訊延伸模組）。裝好後按 F5 重新整理即可。\n\n要現在開啟 %s 的安裝頁面嗎？"
     IDS_LIST_SEPARATOR      "、"
     IDS_TEXT_ERROR          "無法讀取這個檔案"
+    IDS_DOC_PREVIEW         "文件預覽"
+    IDS_DOC_ERROR           "無法預覽這份文件"
+    IDS_DOC_NO_HANDLER      "這台電腦沒有這種檔案的預覽程式。\n安裝 Microsoft Office 或對應的軟體後，就能在這裡預覽。"
+    IDS_DOC_NO_HANDLER_SHORT "沒有預覽程式"
     IDS_PDF_PAGE            "第 %u / %u 頁（Ctrl+PageUp/PageDown 換頁）"
     IDS_TEXT_TRUNCATED      "（檔案太大，只顯示前 8 MB）"
 

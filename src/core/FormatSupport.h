@@ -32,6 +32,10 @@ std::uint32_t MissingCodecPacks(const std::vector<std::wstring>& extensions) noe
 // The first pack in a CodecPackBit mask, or CodecPack::Count when it is empty.
 CodecPack FirstCodecPack(std::uint32_t mask) noexcept;
 
+// Office and similar documents, shown through the system preview handler
+// (".docx", ".xlsx", ".pptx", ".odt", ".rtf"...).
+bool IsDocumentExtension(const wchar_t* extension) noexcept;
+
 // Product name shown to the user ("HEIF", "WebP", ...).
 const wchar_t* CodecPackName(CodecPack pack) noexcept;
 

@@ -14,6 +14,7 @@
 #include "ui/FileListView.h"
 #include "ui/FolderTree.h"
 #include "ui/PreviewPane.h"
+#include "ui/DocumentView.h"
 #include "ui/TextView.h"
 #include "ui/ViewerView.h"
 #include "core/ViewerCache.h"
@@ -217,6 +218,11 @@ private:
     std::unique_ptr<ViewerCache> viewerCache_;
     ViewerView viewer_;
     TextView textView_;      // viewer mode for text files
-    bool viewerIsText_ = false;
+    DocumentView documentView_;  // viewer mode for Office documents
+    enum class ViewerPage { Picture, Text, Document };
+    ViewerPage viewerPageKind_ = ViewerPage::Picture;
+    bool viewerIsText_ = false;  // viewerPageKind_ == Text
+    static ViewerPage PageFor(FileKind kind);
+    HWND ViewerPageHwnd(ViewerPage page) const;
     void ShowViewerPage();   // the picture or text page, whichever is current
 };

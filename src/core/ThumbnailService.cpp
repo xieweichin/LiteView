@@ -268,6 +268,15 @@ void Touch(const std::wstring& path) {
 
 }  // namespace
 
+HRESULT ShellThumbnailImage(const std::wstring& path, UINT size, ThumbnailPtr& out) noexcept {
+    try {
+        return ShellThumbnail(path, size, out);
+    } catch (...) {
+        return E_FAIL;
+    }
+}
+
+
 struct ThumbnailService::Shared {
     OnReady onReady;
     Options options;

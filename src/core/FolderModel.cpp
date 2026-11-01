@@ -181,6 +181,7 @@ void FolderModel::Load(const std::shared_ptr<State>& state, std::wstring path,
                             const bool image = HasExtension(extensions, extension);
                             if (!image && IsTextExtension(extension)) kind = FileKind::Text;
                             if (!image && _wcsicmp(extension, L".pdf") == 0) kind = FileKind::Pdf;
+                            if (!image && IsDocumentExtension(extension)) kind = FileKind::Document;
                             if (!image && kind == FileKind::Image) {
                                 // A known format whose codec extension is not installed.
                                 if (CodecPackForExtension(extension, pack)) {

@@ -7,9 +7,11 @@
 
 #include <algorithm>
 
+#include "core/FormatSupport.h"
 #include "core/ImageDecoder.h"
 #include "core/TextDocument.h"
 #include "core/ThreadPool.h"
+#include "core/ThumbnailService.h"
 #include "ui/Messages.h"
 #include "ui/Theme.h"
 
@@ -27,8 +29,23 @@ struct ThreadCom {
     ~ThreadCom() { if (SUCCEEDED(result)) CoUninitialize(); }
 };
 
+// Office documents: the shell's thumbnail (needs the program's thumbnail
+// provider, e.g. Office); the full document is shown in the viewer.
+HRESULT ShellFitted(const std::wstring& path, UINT boxWidth, UINT boxHeight, HBITMAP& bitmap, UINT& width,
+                    UINT& height) {
+    ThumbnailPtr thumbnail;
+    HRESULT hr = ShellThumbnailImage(path, std::max(boxWidth, boxHeight), thumbnail);
+    if (FAILED(hr)) return hr;
+    bitmap = static_cast<HBITMAP>(CopyImage(thumbnail->bitmap, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION));
+    if (!bitmap) return E_OUTOFMEMORY;
+    width = thumbnail->width;
+    height = thumbnail->height;
+    return S_OK;
+}
+
 HRESULT DecodeFitted(const std::wstring& path, UINT boxWidth, UINT boxHeight, HBITMAP& bitmap, UINT& width,
                      UINT& height) {
+    if (IsDocumentExtension(PathFindExtensionW(path.c_str()))) return ShellFitted(path, boxWidth, boxHeight, bitmap, width, height);
     ImageDecoder decoder;
     DecodedImage image;
     HRESULT hr = decoder.Decode(path, std::max(boxWidth, boxHeight), image);
