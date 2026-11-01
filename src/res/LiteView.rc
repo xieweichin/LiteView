@@ -51,6 +51,7 @@ BEGIN
         MENUITEM "移動到(&M)...",                IDM_EDIT_MOVE_TO
         MENUITEM "刪除(&D)\tDelete",             IDM_EDIT_DELETE
         MENUITEM "改名(&R)\tF2",                 IDM_EDIT_RENAME
+        MENUITEM "批次改名(&B)...\tCtrl+F2",     IDM_EDIT_BATCH_RENAME
         MENUITEM SEPARATOR
         MENUITEM "向左旋轉(&L)\tCtrl+[",         IDM_ROTATE_LEFT
         MENUITEM "向右旋轉(&T)\tCtrl+]",         IDM_ROTATE_RIGHT
@@ -69,6 +70,27 @@ BEGIN
                     LVS_REPORT | LVS_NOSORTHEADER | LVS_SINGLESEL | WS_BORDER | WS_TABSTOP,
                     7, 7, 246, 164
     DEFPUSHBUTTON   "確定", IDOK, 203, 178, 50, 14
+END
+
+// ---- Batch rename dialog ----------------------------------------------------
+IDD_BATCH_RENAME DIALOGEX 0, 0, 330, 250
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "批次改名"
+FONT 9, "MS Shell Dlg", 0, 0, 0x1
+BEGIN
+    LTEXT           "命名規則(&P):", IDC_STATIC, 7, 9, 50, 8
+    EDITTEXT        IDC_BR_PATTERN, 60, 7, 263, 13, ES_AUTOHSCROLL
+    LTEXT           "# 序號（幾個 # 就幾位數）　* 原檔名　{date:yyyyMMdd} 拍攝日期", IDC_STATIC, 60, 23, 263, 8
+    LTEXT           "起始編號(&S):", IDC_STATIC, 7, 39, 50, 8
+    EDITTEXT        IDC_BR_START, 60, 37, 40, 13, ES_NUMBER
+    AUTOCHECKBOX    "副檔名改小寫(&L)", IDC_BR_LOWER_EXT, 120, 38, 100, 10
+    CONTROL         "", IDC_BR_LIST, "SysListView32",
+                    LVS_REPORT | LVS_OWNERDATA | LVS_NOSORTHEADER | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,
+                    7, 56, 316, 150
+    LTEXT           "", IDC_BR_STATUS, 7, 211, 316, 8
+    CONTROL         "", IDC_BR_PROGRESS, "msctls_progress32", WS_BORDER, 7, 231, 200, 12
+    DEFPUSHBUTTON   "改名", IDOK, 219, 229, 50, 14
+    PUSHBUTTON      "取消", IDCANCEL, 273, 229, 50, 14
 END
 
 // ---- Menu -------------------------------------------------------------------
@@ -224,6 +246,19 @@ BEGIN
     IDS_PROP_ISO            "ISO"
     IDS_PROP_FOCAL          "焦距"
     IDS_PROP_TITLE          "圖片資訊 - %s"
+
+    IDS_BR_COL_FROM         "原檔名"
+    IDS_BR_COL_TO           "新檔名"
+    IDS_BR_COL_ISSUE        "問題"
+    IDS_BR_ISSUE_DUPLICATE  "與其他檔案重複"
+    IDS_BR_ISSUE_INVALID    "檔名不合法"
+    IDS_BR_ISSUE_TOO_LONG   "路徑太長"
+    IDS_BR_ISSUE_EXISTS     "已有同名檔案"
+    IDS_BR_CONFLICTS        "有 %u 個衝突（紅字），請修改規則。"
+    IDS_BR_READY            "共 %u 個檔案。"
+    IDS_ERR_BATCH_RENAME    "批次改名失敗，所有檔案已改回原名：%s"
+    IDS_ERR_UNDO_RENAME     "無法復原批次改名：%s"
+    IDS_BR_NOTHING_TO_UNDO  "沒有可以復原的批次改名。"
 
     // Toolbar tooltips (string ID = command ID)
     IDM_NAV_PARENT_FOLDER   "上層資料夾 (Backspace)"

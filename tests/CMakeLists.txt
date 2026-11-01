@@ -8,7 +8,8 @@ add_executable(LiteViewTests
     test_thumbnail_service.cpp
     test_viewer_cache.cpp
     test_rotator.cpp
-    test_file_ops.cpp)
+    test_file_ops.cpp
+    test_batch_rename.cpp)
 target_include_directories(LiteViewTests PRIVATE third_party)
 target_link_libraries(LiteViewTests PRIVATE LiteViewCore)
 add_custom_target(LiteViewTestFixtures
