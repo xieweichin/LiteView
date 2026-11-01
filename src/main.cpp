@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <shellapi.h>
 #include <commctrl.h>
 #include <objbase.h>
 
@@ -54,8 +55,16 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
 
     int exitCode = 0;
     {
+        // An optional folder or image path, e.g. from "Open with".
+        std::wstring startPath;
+        int argc = 0;
+        if (LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc)) {
+            if (argc > 1 && argv[1]) startPath = argv[1];
+            LocalFree(argv);
+        }
+
         MainWindow window;
-        hr = window.Create(instance, showCommand);
+        hr = window.Create(instance, showCommand, startPath);
         if (FAILED(hr)) {
             ReportStartupError(instance, hr);
             CoUninitialize();

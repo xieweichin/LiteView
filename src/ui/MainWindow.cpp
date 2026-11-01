@@ -1,8 +1,13 @@
 #include "ui/MainWindow.h"
 
 #include <commctrl.h>
+#include <knownfolders.h>
+#include <shlobj.h>
+#include <shlwapi.h>
+#include <shobjidl.h>
 #include <windowsx.h>
 
+#include <algorithm>
 #include <climits>
 #include <condition_variable>
 #include <cstdint>
@@ -10,17 +15,25 @@
 #include <new>
 
 #include "core/Settings.h"
+#include "core/ThreadPool.h"
 #include "res/resource.h"
 #include "ui/Commands.h"
+#include "ui/Messages.h"
 
 namespace {
 
 constexpr wchar_t kClassName[] = L"LiteViewMainWindow";
 constexpr int kMinWidth = 480;   // in 96-DPI pixels
 constexpr int kMinHeight = 320;
-constexpr UINT kSettingsReady = WM_APP + 1;
-constexpr UINT kSettingsSaved = WM_APP + 2;
+constexpr UINT kSettingsReady = WM_APP_SETTINGS_READY;
+constexpr UINT kSettingsSaved = WM_APP_SETTINGS_SAVED;
 constexpr UINT_PTR kSettingsTimer = 1;
+constexpr UINT kIdTree = 10;
+constexpr UINT kIdList = 11;
+constexpr UINT kIdPathBar = 12;
+constexpr int kSplitter = 5;        // 96-DPI pixels
+constexpr int kMinPane = 80;        // 96-DPI pixels
+constexpr int kGap = 3;             // 96-DPI pixels
 constexpr UINT kSettingsWaitMs = 200;
 
 int Scale(int value, UINT dpi) { return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI); }
@@ -31,6 +44,73 @@ bool FocusIsTextInput() {
     wchar_t cls[32] = {};
     GetClassNameW(focus, cls, ARRAYSIZE(cls));
     return lstrcmpiW(cls, WC_EDITW) == 0;
+}
+
+bool SamePath(const std::wstring& a, const std::wstring& b) {
+    return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
+}
+
+// Full, backslash-separated path without a trailing separator except for
+// drive roots ("C:\").
+std::wstring NormalizeFolder(const std::wstring& path) {
+    std::wstring text = path;
+    // Strip surrounding quotes and spaces from a pasted path.
+    while (!text.empty() && (text.back() == L' ' || text.back() == L'"')) text.pop_back();
+    std::size_t start = 0;
+    while (start < text.size() && (text[start] == L' ' || text[start] == L'"')) ++start;
+    text = text.substr(start);
+    if (text.empty()) return text;
+    for (auto& c : text) if (c == L'/') c = L'\\';
+    wchar_t full[MAX_PATH * 4] = {};
+    const DWORD len = GetFullPathNameW(text.c_str(), ARRAYSIZE(full), full, nullptr);
+    if (len > 0 && len < ARRAYSIZE(full)) text = full;
+    while (text.size() > 3 && text.back() == L'\\') text.pop_back();
+    if (text.size() == 2 && text[1] == L':') text += L'\\';
+    return text;
+}
+
+std::wstring ParentOf(const std::wstring& folder) {
+    if (folder.size() <= 3) return std::wstring();  // drive root
+    const auto slash = folder.find_last_of(L'\\');
+    if (slash == std::wstring::npos) return std::wstring();
+    if (slash < 3) return folder.substr(0, 3);
+    if (slash <= 2 || (folder.compare(0, 2, L"\\\\") == 0 && folder.find(L'\\', 2) == slash)) {
+        return std::wstring();  // "\\server\share" has no listable parent
+    }
+    return folder.substr(0, slash);
+}
+
+std::wstring PicturesFolder() {
+    PWSTR path = nullptr;
+    std::wstring result;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Pictures, KF_FLAG_DEFAULT, nullptr, &path)) && path) {
+        result = path;
+    }
+    CoTaskMemFree(path);
+    if (result.empty()) {
+        wchar_t drive[MAX_PATH] = {};
+        if (GetWindowsDirectoryW(drive, ARRAYSIZE(drive)) >= 3) result.assign(drive, 3);
+    }
+    return result;
+}
+
+bool IsDirectory(const std::wstring& path) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+std::wstring Format(const std::wstring& pattern, const std::wstring& arg) {
+    std::wstring text = pattern;
+    const auto at = text.find(L"%s");
+    if (at != std::wstring::npos) text.replace(at, 2, arg);
+    return text;
+}
+
+std::wstring Format(const std::wstring& pattern, std::size_t value) {
+    std::wstring text = pattern;
+    const auto at = text.find(L"%u");
+    if (at != std::wstring::npos) text.replace(at, 2, std::to_wstring(value));
+    return text;
 }
 
 }  // namespace
@@ -45,9 +125,15 @@ struct MainWindow::SettingsState {
     bool canRestore = false;
     RECT normal{};
     bool maximized = false;
+    BrowserSettings browser;
     HRESULT readResult = S_OK;
     HRESULT writeResult = S_OK;
 };
+
+MainWindow::MainWindow()
+    : pool_(std::make_shared<ThreadPool>(ThreadPool::DefaultThreadCount())),
+      model_(std::make_unique<FolderModel>(pool_)),
+      list_(std::make_unique<FileListView>(*model_)) {}
 
 MainWindow::~MainWindow() {
     if (settingsState_) {
@@ -59,11 +145,16 @@ MainWindow::~MainWindow() {
         settingsState_->changed.notify_one();
     }
     if (settingsThread_.joinable()) settingsThread_.join();
+    // Stop folder loads before the pool goes away.
+    list_.reset();
+    model_.reset();
+    if (pool_) pool_->Shutdown();
 }
 
-HRESULT MainWindow::Create(HINSTANCE instance, int showCommand) {
+HRESULT MainWindow::Create(HINSTANCE instance, int showCommand, const std::wstring& startPath) {
     instance_ = instance;
     showCommand_ = showCommand;
+    startPath_ = startPath;
 
     WNDCLASSEXW wc = {sizeof(wc)};
     wc.style = CS_DBLCLKS;
@@ -74,7 +165,7 @@ HRESULT MainWindow::Create(HINSTANCE instance, int showCommand) {
                                                GetSystemMetrics(SM_CXSMICON),
                                                GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);  // splitter gaps
     wc.lpszMenuName = MAKEINTRESOURCEW(IDR_MAINMENU);
     wc.lpszClassName = kClassName;
     if (!RegisterClassExW(&wc)) return HRESULT_FROM_WIN32(GetLastError());
@@ -155,7 +246,11 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_TIMER:
         if (wParam == kSettingsTimer) {
             KillTimer(hwnd_, kSettingsTimer);
-            if (!closing_) ShowInitialWindow(showCommand_);
+            if (!closing_) {
+                // Settings are slow: start with defaults rather than wait.
+                InitBrowser(BrowserSettings{});
+                ShowInitialWindow(showCommand_);
+            }
             return 0;
         }
         break;
@@ -165,7 +260,45 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case kSettingsSaved:
         OnSettingsSaved(wParam);
         return 0;
+    case WM_APP_FOLDER_LOADED:
+        OnFolderLoaded(static_cast<std::uint32_t>(wParam));
+        return 0;
+    case WM_APP_TREE_CHILDREN:
+        tree_.OnChildrenReady();
+        return 0;
+    case WM_APP_UPDATE_STATUS:
+        statusPending_ = false;
+        UpdateStatus();
+        return 0;
+    case WM_APP_PATH_ENTERED:
+        NavigateToEnteredPath();
+        return 0;
+    case WM_INITMENUPOPUP:
+        OnInitMenuPopup(reinterpret_cast<HMENU>(wParam));
+        return 0;
+    case WM_SETFOCUS:
+        if (list_ && list_->Hwnd()) SetFocus(list_->Hwnd());
+        return 0;
+    case WM_SETCURSOR:
+        if (reinterpret_cast<HWND>(wParam) == hwnd_ && LOWORD(lParam) == HTCLIENT && OnSetCursor()) return TRUE;
+        break;
+    case WM_LBUTTONDOWN:
+        OnLButtonDown(POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+        return 0;
+    case WM_MOUSEMOVE:
+        OnMouseMove(POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+        return 0;
+    case WM_LBUTTONUP:
+        OnLButtonUp();
+        return 0;
+    case WM_CAPTURECHANGED:
+        dragging_ = Splitter::None;
+        return 0;
     case WM_DESTROY:
+        if (font_) {
+            DeleteObject(font_);
+            font_ = nullptr;
+        }
         if (settingsState_) {
             {
                 std::lock_guard<std::mutex> lock(settingsState_->mutex);
@@ -188,9 +321,60 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
 bool MainWindow::OnCreate() {
     dpi_ = GetDpiForWindow(hwnd_);
+    NONCLIENTMETRICSW metrics = {sizeof(metrics)};
+    if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi_)) {
+        font_ = CreateFontIndirectW(&metrics.lfMessageFont);
+    }
     CreateToolbar();
+    CreatePathBar();
     CreateStatusBar();
-    return toolbar_ && status_;
+    if (!toolbar_ || !status_ || !pathBar_) return false;
+    if (FAILED(tree_.Create(hwnd_, instance_, kIdTree, hwnd_))) return false;
+    if (FAILED(preview_.Create(hwnd_, instance_))) return false;
+    if (FAILED(list_->Create(hwnd_, instance_, kIdList))) return false;
+
+    tree_.SetNavigateCallback([this](const std::wstring& path) { Navigate(path); });
+    list_->SetColumnClickCallback([this](SortKey key) { OnSortCommand(key); });
+    list_->SetSelectionChangedCallback([this] { RequestStatusUpdate(); });
+    list_->SetActivateCallback([](int) { /* T6: open the viewer */ });
+    return true;
+}
+
+void MainWindow::CreatePathBar() {
+    pathBar_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, nullptr,
+                               WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd_,
+                               reinterpret_cast<HMENU>(static_cast<UINT_PTR>(kIdPathBar)), instance_, nullptr);
+    if (!pathBar_) return;
+    if (font_) SendMessageW(pathBar_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), FALSE);
+    SetWindowSubclass(pathBar_, &MainWindow::PathBarProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    SHAutoComplete(pathBar_, SHACF_FILESYS_DIRS | SHACF_AUTOSUGGEST_FORCE_ON | SHACF_AUTOAPPEND_FORCE_OFF);
+}
+
+LRESULT CALLBACK MainWindow::PathBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR,
+                                         DWORD_PTR data) {
+    auto* self = reinterpret_cast<MainWindow*>(data);
+    switch (msg) {
+    case WM_KEYDOWN:
+        if (wParam == VK_RETURN) {
+            PostMessageW(self->hwnd_, WM_APP_PATH_ENTERED, 0, 0);
+            return 0;
+        }
+        if (wParam == VK_ESCAPE) {
+            SetWindowTextW(hwnd, self->listFolder_.c_str());
+            SetFocus(self->list_->Hwnd());
+            return 0;
+        }
+        break;
+    case WM_CHAR:
+        if (wParam == L'\r' || wParam == 27) return 0;  // no beep
+        break;
+    case WM_GETDLGCODE:
+        return DefSubclassProc(hwnd, msg, wParam, lParam) | DLGC_WANTALLKEYS;
+    case WM_NCDESTROY:
+        RemoveWindowSubclass(hwnd, &MainWindow::PathBarProc, 1);
+        break;
+    }
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
 void MainWindow::CreateToolbar() {
@@ -248,7 +432,115 @@ void MainWindow::OnSize() {
         SendMessageW(status_, WM_SIZE, 0, 0);
         UpdateStatusParts();
     }
-    // T4: lay out folder tree, preview pane and file list in the remaining area.
+    Layout();
+}
+
+void MainWindow::Layout() {
+    if (!hwnd_ || !pathBar_ || !list_ || !list_->Hwnd()) return;
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    int top = 0;
+    if (toolbar_) {
+        RECT tb{};
+        GetWindowRect(toolbar_, &tb);
+        top = tb.bottom - tb.top;
+    }
+    int bottom = rc.bottom;
+    if (status_) {
+        RECT sb{};
+        GetWindowRect(status_, &sb);
+        bottom -= sb.bottom - sb.top;
+    }
+    const int gap = Scale(kGap, dpi_);
+    const int splitter = Scale(kSplitter, dpi_);
+
+    TEXTMETRICW tm{};
+    HDC dc = GetDC(pathBar_);
+    HGDIOBJ old = SelectObject(dc, font_ ? static_cast<HGDIOBJ>(font_) : GetStockObject(DEFAULT_GUI_FONT));
+    GetTextMetricsW(dc, &tm);
+    SelectObject(dc, old);
+    ReleaseDC(pathBar_, dc);
+    const int pathHeight = tm.tmHeight + Scale(8, dpi_);
+
+    HDWP dwp = BeginDeferWindowPos(4);
+    auto place = [&](HWND child, int x, int y, int w, int h) {
+        if (dwp) dwp = DeferWindowPos(dwp, child, nullptr, x, y, std::max(w, 0), std::max(h, 0),
+                                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    };
+    place(pathBar_, gap, top + gap, rc.right - 2 * gap, pathHeight);
+
+    content_ = RECT{0, top + gap + pathHeight + gap, rc.right, bottom};
+    const int width = content_.right - content_.left;
+    const int height = content_.bottom - content_.top;
+    const int minPane = Scale(kMinPane, dpi_);
+    int left = Scale(leftWidth96_, dpi_);
+    left = std::min(left, width - splitter - minPane);
+    left = std::max(left, std::min(minPane, width / 2));
+    int tree = Scale(treeHeight96_, dpi_);
+    tree = std::min(tree, height - splitter - minPane / 2);
+    tree = std::max(tree, std::min(minPane, height / 2));
+
+    place(tree_.Hwnd(), 0, content_.top, left, tree);
+    place(preview_.Hwnd(), 0, content_.top + tree + splitter, left, height - tree - splitter);
+    place(list_->Hwnd(), left + splitter, content_.top, width - left - splitter, height);
+    if (dwp) EndDeferWindowPos(dwp);
+}
+
+MainWindow::Splitter MainWindow::HitTestSplitter(POINT pt) const {
+    if (!PtInRect(&content_, pt)) return Splitter::None;
+    const int splitter = Scale(kSplitter, dpi_);
+    RECT treeRect{};
+    GetWindowRect(tree_.Hwnd(), &treeRect);
+    MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&treeRect), 2);
+    if (pt.x >= treeRect.right && pt.x < treeRect.right + splitter) return Splitter::Vertical;
+    if (pt.x < treeRect.right && pt.y >= treeRect.bottom && pt.y < treeRect.bottom + splitter) {
+        return Splitter::Horizontal;
+    }
+    return Splitter::None;
+}
+
+bool MainWindow::OnSetCursor() {
+    POINT pt{};
+    GetCursorPos(&pt);
+    ScreenToClient(hwnd_, &pt);
+    const Splitter hit = dragging_ != Splitter::None ? dragging_ : HitTestSplitter(pt);
+    if (hit == Splitter::None) return false;
+    SetCursor(LoadCursorW(nullptr, hit == Splitter::Vertical ? IDC_SIZEWE : IDC_SIZENS));
+    return true;
+}
+
+void MainWindow::OnLButtonDown(POINT pt) {
+    dragging_ = HitTestSplitter(pt);
+    if (dragging_ == Splitter::None) return;
+    RECT treeRect{};
+    GetWindowRect(tree_.Hwnd(), &treeRect);
+    MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&treeRect), 2);
+    dragOffset_ = dragging_ == Splitter::Vertical ? pt.x - treeRect.right : pt.y - treeRect.bottom;
+    SetCapture(hwnd_);
+}
+
+void MainWindow::OnMouseMove(POINT pt) {
+    if (dragging_ == Splitter::None || GetCapture() != hwnd_) return;
+    if (dragging_ == Splitter::Vertical) {
+        leftWidth96_ = MulDiv(std::max(0, static_cast<int>(pt.x) - dragOffset_), USER_DEFAULT_SCREEN_DPI,
+                              static_cast<int>(dpi_));
+    } else {
+        treeHeight96_ = MulDiv(std::max(0, static_cast<int>(pt.y - content_.top) - dragOffset_),
+                               USER_DEFAULT_SCREEN_DPI, static_cast<int>(dpi_));
+    }
+    Layout();
+}
+
+void MainWindow::OnLButtonUp() {
+    if (dragging_ == Splitter::None) return;
+    dragging_ = Splitter::None;
+    ReleaseCapture();
+    // Store what the layout actually used, so a clamped drag does not leave
+    // an out-of-range value in the settings.
+    RECT treeRect{};
+    GetWindowRect(tree_.Hwnd(), &treeRect);
+    leftWidth96_ = MulDiv(treeRect.right - treeRect.left, USER_DEFAULT_SCREEN_DPI, static_cast<int>(dpi_));
+    treeHeight96_ = MulDiv(treeRect.bottom - treeRect.top, USER_DEFAULT_SCREEN_DPI, static_cast<int>(dpi_));
 }
 
 void MainWindow::OnCommand(UINT id) {
@@ -256,6 +548,47 @@ void MainWindow::OnCommand(UINT id) {
     case IDM_FILE_EXIT:
         PostMessageW(hwnd_, WM_CLOSE, 0, 0);
         break;
+    case IDM_FILE_OPEN_FOLDER: {
+        IFileOpenDialog* dialog = nullptr;
+        if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                       IID_PPV_ARGS(&dialog)))) {
+            DWORD options = 0;
+            dialog->GetOptions(&options);
+            dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+            IShellItem* current = nullptr;
+            if (!listFolder_.empty() &&
+                SUCCEEDED(SHCreateItemFromParsingName(listFolder_.c_str(), nullptr, IID_PPV_ARGS(&current)))) {
+                dialog->SetFolder(current);
+                current->Release();
+            }
+            IShellItem* picked = nullptr;
+            if (SUCCEEDED(dialog->Show(hwnd_)) && SUCCEEDED(dialog->GetResult(&picked))) {
+                PWSTR path = nullptr;
+                if (SUCCEEDED(picked->GetDisplayName(SIGDN_FILESYSPATH, &path))) Navigate(path);
+                CoTaskMemFree(path);
+                picked->Release();
+            }
+            dialog->Release();
+        }
+        break;
+    }
+    case IDM_NAV_PARENT_FOLDER:
+        NavigateToParent();
+        break;
+    case IDM_VIEW_REFRESH:
+        Refresh();
+        break;
+    case IDM_EDIT_SELECT_ALL:
+        list_->SelectAll();
+        break;
+    case IDM_VIEW_THUMBNAILS: SetViewMode(FileListView::ViewMode::Thumbnails); break;
+    case IDM_VIEW_LARGE_ICONS: SetViewMode(FileListView::ViewMode::LargeIcons); break;
+    case IDM_VIEW_LIST: SetViewMode(FileListView::ViewMode::List); break;
+    case IDM_VIEW_DETAILS: SetViewMode(FileListView::ViewMode::Details); break;
+    case IDM_SORT_NAME: OnSortCommand(SortKey::Name); break;
+    case IDM_SORT_SIZE: OnSortCommand(SortKey::Size); break;
+    case IDM_SORT_TYPE: OnSortCommand(SortKey::Type); break;
+    case IDM_SORT_MODIFIED: OnSortCommand(SortKey::Modified); break;
     case IDM_HELP_ABOUT: {
         const std::wstring text = LoadStr(IDS_ABOUT_TEXT);
         const std::wstring title = LoadStr(IDS_APP_TITLE);
@@ -269,6 +602,9 @@ void MainWindow::OnCommand(UINT id) {
 }
 
 LRESULT MainWindow::OnNotify(NMHDR* header) {
+    LRESULT result = 0;
+    if (tree_.OnNotify(header, result)) return result;
+    if (list_->OnNotify(header, result)) return result;
     if (header->code == TTN_GETDISPINFOW) {
         auto* info = reinterpret_cast<NMTTDISPINFOW*>(header);
         info->hinst = instance_;
@@ -278,8 +614,24 @@ LRESULT MainWindow::OnNotify(NMHDR* header) {
     return 0;
 }
 
+void MainWindow::OnInitMenuPopup(HMENU menu) {
+    const int view = static_cast<int>(list_->GetViewMode());
+    CheckMenuRadioItem(menu, IDM_VIEW_THUMBNAILS, IDM_VIEW_DETAILS, IDM_VIEW_THUMBNAILS + view, MF_BYCOMMAND);
+    CheckMenuRadioItem(menu, IDM_SORT_NAME, IDM_SORT_MODIFIED, IDM_SORT_NAME + static_cast<int>(sortKey_),
+                       MF_BYCOMMAND);
+}
+
 void MainWindow::OnDpiChanged(UINT dpi, const RECT* suggested) {
     dpi_ = dpi;
+    if (font_) {
+        DeleteObject(font_);
+        font_ = nullptr;
+    }
+    NONCLIENTMETRICSW metrics = {sizeof(metrics)};
+    if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi_)) {
+        font_ = CreateFontIndirectW(&metrics.lfMessageFont);
+        if (font_ && pathBar_) SendMessageW(pathBar_, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    }
     SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
                  suggested->right - suggested->left, suggested->bottom - suggested->top,
                  SWP_NOZORDER | SWP_NOACTIVATE);
@@ -327,9 +679,40 @@ void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noe
                      height >= kMinHeight && width <= 100000 && height <= 100000;
         initial = RECT{left, top, right, bottom};
     }
+    // Browser layout. A bad value falls back to its default rather than
+    // failing the whole read.
+    BrowserSettings browser;
+    if (SUCCEEDED(initResult)) {
+        const BrowserSettings defaults;
+        std::wstring folder;
+        int value = 0;
+        bool flag = true;
+        if (SUCCEEDED(settings.ReadString(L"Browser", L"LastFolder", L"", folder)) && !folder.empty() &&
+            IsDirectory(folder)) {
+            browser.lastFolder = folder;
+        }
+        if (SUCCEEDED(settings.ReadInt(L"Browser", L"LeftWidth", defaults.leftWidth, value)) && value >= 0 &&
+            value <= 10000) {
+            browser.leftWidth = value;
+        }
+        if (SUCCEEDED(settings.ReadInt(L"Browser", L"TreeHeight", defaults.treeHeight, value)) && value >= 0 &&
+            value <= 10000) {
+            browser.treeHeight = value;
+        }
+        if (SUCCEEDED(settings.ReadInt(L"Browser", L"ViewMode", defaults.viewMode, value)) && value >= 0 &&
+            value <= static_cast<int>(FileListView::ViewMode::Details)) {
+            browser.viewMode = value;
+        }
+        if (SUCCEEDED(settings.ReadInt(L"Browser", L"SortKey", defaults.sortKey, value)) && value >= 0 &&
+            value <= static_cast<int>(SortKey::Modified)) {
+            browser.sortKey = value;
+        }
+        if (SUCCEEDED(settings.ReadBool(L"Browser", L"SortAscending", true, flag))) browser.sortAscending = flag;
+    }
 
     RECT final{};
     bool finalMaximized = false;
+    BrowserSettings finalBrowser;
     bool save = false;
     {
         std::unique_lock<std::mutex> lock(state->mutex);
@@ -340,6 +723,7 @@ void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noe
             state->normal = initial;
             state->maximized = maximized;
             state->canRestore = canRestore;
+            state->browser = browser;
         }
         if (!state->stop && !state->closeRequested && state->hwnd) {
             PostMessageW(state->hwnd, kSettingsReady, reinterpret_cast<WPARAM>(state.get()), 0);
@@ -348,6 +732,7 @@ void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noe
         save = !state->stop && state->saveRequested;
         final = state->normal;
         finalMaximized = state->maximized;
+        finalBrowser = state->browser;
     }
 
     // A malformed saved value should not prevent writing a corrected one.
@@ -358,6 +743,16 @@ void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noe
         if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Window", L"Right", final.right);
         if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Window", L"Bottom", final.bottom);
         if (SUCCEEDED(writeResult)) writeResult = settings.WriteBool(L"Window", L"Maximized", finalMaximized);
+        if (SUCCEEDED(writeResult) && !finalBrowser.lastFolder.empty()) {
+            writeResult = settings.WriteString(L"Browser", L"LastFolder", finalBrowser.lastFolder);
+        }
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"LeftWidth", finalBrowser.leftWidth);
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"TreeHeight", finalBrowser.treeHeight);
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"ViewMode", finalBrowser.viewMode);
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"SortKey", finalBrowser.sortKey);
+        if (SUCCEEDED(writeResult)) {
+            writeResult = settings.WriteBool(L"Browser", L"SortAscending", finalBrowser.sortAscending);
+        }
     }
     {
         std::lock_guard<std::mutex> lock(state->mutex);
@@ -375,12 +770,14 @@ void MainWindow::OnSettingsReady(WPARAM token) {
     bool maximized = false;
     bool canRestore = false;
     HRESULT hr = S_OK;
+    BrowserSettings browser;
     {
         std::lock_guard<std::mutex> lock(settingsState_->mutex);
         rect = settingsState_->normal;
         maximized = settingsState_->maximized;
         canRestore = settingsState_->canRestore;
         hr = settingsState_->readResult;
+        browser = settingsState_->browser;
     }
     int command = showCommand_;
     if (!shown_ && canRestore && MonitorFromRect(&rect, MONITOR_DEFAULTTONULL)) {
@@ -395,6 +792,7 @@ void MainWindow::OnSettingsReady(WPARAM token) {
             }
         }
     }
+    InitBrowser(browser);
     ShowInitialWindow(command);
     if (FAILED(hr)) {
         MessageBoxW(hwnd_, LoadStr(IDS_ERR_SETTINGS_READ).c_str(), LoadStr(IDS_APP_TITLE).c_str(),
@@ -423,6 +821,15 @@ void MainWindow::OnClose() {
         settingsState_->normal = placement.rcNormalPosition;
         settingsState_->maximized = placement.showCmd == SW_SHOWMAXIMIZED ||
             (placement.showCmd == SW_SHOWMINIMIZED && (placement.flags & WPF_RESTORETOMAXIMIZED));
+        BrowserSettings& browser = settingsState_->browser;
+        if (browserStarted_) {
+            if (!listFolder_.empty()) browser.lastFolder = listFolder_;
+            browser.leftWidth = leftWidth96_;
+            browser.treeHeight = treeHeight96_;
+            browser.viewMode = static_cast<int>(list_->GetViewMode());
+            browser.sortKey = static_cast<int>(sortKey_);
+            browser.sortAscending = sortAscending_;
+        }
         settingsState_->saveRequested = true;
         settingsState_->closeRequested = true;
     }
@@ -441,4 +848,154 @@ void MainWindow::OnSettingsSaved(WPARAM token) {
                     MB_OK | MB_ICONWARNING);
     }
     DestroyWindow(hwnd_);
+}
+
+// ---- Browser ----------------------------------------------------------------
+
+void MainWindow::InitBrowser(const BrowserSettings& settings) {
+    if (browserStarted_) return;
+    browserStarted_ = true;
+    leftWidth96_ = settings.leftWidth;
+    treeHeight96_ = settings.treeHeight;
+    sortKey_ = static_cast<SortKey>(settings.sortKey);
+    sortAscending_ = settings.sortAscending;
+    model_->Sort(sortKey_, sortAscending_);  // nothing loaded yet: just sets the order
+    list_->SetSortIndicator(sortKey_, sortAscending_);
+    list_->SetViewMode(static_cast<FileListView::ViewMode>(settings.viewMode));
+    Layout();
+
+    // Command line first, then the last folder, then Pictures.
+    std::wstring folder;
+    std::wstring select;
+    if (!startPath_.empty()) {
+        const std::wstring path = NormalizeFolder(startPath_);
+        const DWORD attributes = GetFileAttributesW(path.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            folder = path;
+        } else if (attributes != INVALID_FILE_ATTRIBUTES) {
+            const auto slash = path.find_last_of(L'\\');
+            if (slash != std::wstring::npos) {
+                folder = NormalizeFolder(path.substr(0, slash + 1));
+                select = path.substr(slash + 1);
+            }
+        }
+    }
+    if (folder.empty()) folder = settings.lastFolder;
+    if (folder.empty()) folder = PicturesFolder();
+    if (!folder.empty()) Navigate(folder, select);
+    SetFocus(list_->Hwnd());
+}
+
+void MainWindow::Navigate(const std::wstring& path, const std::wstring& selectName) {
+    const std::wstring folder = NormalizeFolder(path);
+    if (folder.empty()) return;
+    pendingFolder_ = folder;
+    pendingSelect_ = selectName;
+    SetWindowTextW(pathBar_, folder.c_str());
+    tree_.RevealPath(folder);
+    SetStatusText(0, Format(LoadStr(IDS_STATUS_LOADING), folder));
+
+    const HWND hwnd = hwnd_;
+    generation_ = model_->Open(folder, [hwnd](std::uint32_t generation) {
+        // Runs on a worker under the model's lock: post only.
+        PostMessageW(hwnd, WM_APP_FOLDER_LOADED, static_cast<WPARAM>(generation), 0);
+    });
+    if (generation_ == 0) {
+        SetStatusText(0, Format(LoadStr(IDS_ERR_OPEN_FOLDER), folder));
+    }
+}
+
+void MainWindow::NavigateToEnteredPath() {
+    const int length = GetWindowTextLengthW(pathBar_);
+    std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
+    GetWindowTextW(pathBar_, text.data(), length + 1);
+    text.resize(static_cast<std::size_t>(length));
+    const std::wstring path = NormalizeFolder(text);
+    if (path.empty()) return;
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        MessageBeep(MB_ICONWARNING);
+        SetStatusText(0, Format(LoadStr(IDS_ERR_OPEN_FOLDER), path));
+        return;
+    }
+    if (attributes & FILE_ATTRIBUTE_DIRECTORY) {
+        Navigate(path);
+    } else {
+        const auto slash = path.find_last_of(L'\\');
+        if (slash == std::wstring::npos) return;
+        Navigate(path.substr(0, slash + 1), path.substr(slash + 1));
+    }
+    SetFocus(list_->Hwnd());
+}
+
+void MainWindow::NavigateToParent() {
+    const std::wstring& current = pendingFolder_.empty() ? listFolder_ : pendingFolder_;
+    const std::wstring parent = ParentOf(current);
+    if (!parent.empty()) Navigate(parent);
+}
+
+void MainWindow::Refresh() {
+    if (!listFolder_.empty()) Navigate(listFolder_);
+}
+
+void MainWindow::OnFolderLoaded(std::uint32_t generation) {
+    if (generation != generation_) return;  // superseded by a newer Open
+    // Keep the selection across refresh and re-sort of the same folder.
+    FileListView::SavedSelection saved;
+    if (!pendingSelect_.empty()) {
+        saved.names.push_back(pendingSelect_);
+        saved.focus = pendingSelect_;
+    } else if (!listFolder_.empty() && SamePath(pendingFolder_, listFolder_)) {
+        saved = list_->SaveSelection();
+    }
+    const HRESULT hr = model_->Commit(generation);
+    if (hr == E_PENDING || hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
+    if (FAILED(hr)) {
+        // Keep showing the previous folder.
+        MessageBeep(MB_ICONWARNING);
+        SetStatusText(0, Format(LoadStr(IDS_ERR_OPEN_FOLDER), pendingFolder_));
+        SetWindowTextW(pathBar_, listFolder_.c_str());
+        if (!listFolder_.empty()) tree_.RevealPath(listFolder_);
+        pendingFolder_ = listFolder_;
+        pendingSelect_.clear();
+        return;
+    }
+    listFolder_ = pendingFolder_;
+    pendingSelect_.clear();
+    list_->Reset(saved);
+    SetStatusText(0, listFolder_);
+    UpdateStatus();
+}
+
+void MainWindow::OnSortCommand(SortKey key) {
+    ApplySort(key, key == sortKey_ ? !sortAscending_ : true);
+}
+
+void MainWindow::ApplySort(SortKey key, bool ascending) {
+    sortKey_ = key;
+    sortAscending_ = ascending;
+    list_->SetSortIndicator(key, ascending);
+    // The model re-sorts on a worker and reports with the current generation.
+    model_->Sort(key, ascending);
+}
+
+void MainWindow::SetViewMode(FileListView::ViewMode mode) { list_->SetViewMode(mode); }
+
+void MainWindow::RequestStatusUpdate() {
+    if (statusPending_ || !hwnd_) return;
+    statusPending_ = PostMessageW(hwnd_, WM_APP_UPDATE_STATUS, 0, 0) != FALSE;
+}
+
+void MainWindow::UpdateStatus() {
+    if (!status_) return;
+    const FileListView::Selection selection = list_->GetSelection();
+    SetStatusText(1, Format(LoadStr(IDS_STATUS_FILES), model_->Count()));
+    SetStatusText(2, Format(LoadStr(IDS_STATUS_SELECTED), selection.count));
+    wchar_t size[32] = {};
+    if (selection.count > 0) StrFormatByteSizeW(static_cast<LONGLONG>(selection.bytes), size, ARRAYSIZE(size));
+    SetStatusText(3, size);
+}
+
+void MainWindow::SetStatusText(int part, const std::wstring& text) {
+    if (status_) SendMessageW(status_, SB_SETTEXTW, static_cast<WPARAM>(part), reinterpret_cast<LPARAM>(text.c_str()));
 }

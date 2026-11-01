@@ -149,6 +149,16 @@ BEGIN
     IDS_ERR_SETTINGS_READ   "無法讀取視窗設定，將使用預設位置。"
     IDS_ERR_SETTINGS_WRITE  "無法儲存視窗位置，請檢查設定資料夾是否可寫入。"
 
+    IDS_COL_NAME            "名稱"
+    IDS_COL_SIZE            "大小"
+    IDS_COL_TYPE            "類型"
+    IDS_COL_MODIFIED        "修改日期"
+    IDS_TREE_LOADING        "讀取中…"
+    IDS_STATUS_LOADING      "正在讀取 %s"
+    IDS_STATUS_FILES        "%u 個檔案"
+    IDS_STATUS_SELECTED     "已選取 %u 個"
+    IDS_ERR_OPEN_FOLDER     "無法開啟資料夾：%s"
+
     // Toolbar tooltips (string ID = command ID)
     IDM_NAV_PARENT_FOLDER   "上層資料夾 (Backspace)"
     IDM_VIEW_REFRESH        "重新整理 (F5)"
