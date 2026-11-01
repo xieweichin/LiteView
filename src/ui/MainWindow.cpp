@@ -307,6 +307,11 @@ bool MainWindow::TranslateAccelerator(MSG* msg) {
         }
         return accelViewer_ && ::TranslateAcceleratorW(hwnd_, accelViewer_, msg) != 0;
     }
+    // The video page uses Space to play and pause.
+    if (mode_ == Mode::Viewer && viewerPageKind_ == ViewerPage::Video && videoView_.Owns(GetFocus()) &&
+        msg->message == WM_KEYDOWN && msg->wParam == VK_SPACE) {
+        return false;
+    }
     // Let edit boxes (path bar, in-place rename) keep Backspace, Delete, Ctrl+A...
     if (FocusIsTextInput()) return false;
     HACCEL table = (mode_ == Mode::Viewer) ? accelViewer_ : accelBrowser_;
@@ -413,7 +418,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_CONTEXTMENU:
         if (reinterpret_cast<HWND>(wParam) == list_->Hwnd() || reinterpret_cast<HWND>(wParam) == viewer_.Hwnd() ||
             reinterpret_cast<HWND>(wParam) == textView_.Hwnd() || reinterpret_cast<HWND>(wParam) == documentView_.Hwnd() ||
-            reinterpret_cast<HWND>(wParam) == modelView_.Hwnd()) {
+            reinterpret_cast<HWND>(wParam) == modelView_.Hwnd() || videoView_.Owns(reinterpret_cast<HWND>(wParam))) {
             ShowContextMenu(POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
             return 0;
         }
@@ -539,6 +544,13 @@ bool MainWindow::OnCreate() {
         modelCallbacks.navigate = [this](int step) { ViewerStep(step); };
         modelCallbacks.exit = [this] { ExitViewer(); };
         if (FAILED(modelView_.Create(hwnd_, instance_, std::move(modelCallbacks)))) return false;
+    }
+    {
+        VideoView::Callbacks videoCallbacks;
+        videoCallbacks.changed = [this] { UpdateViewerStatus(); };
+        videoCallbacks.navigate = [this](int step) { ViewerStep(step); };
+        videoCallbacks.exit = [this] { ExitViewer(); };
+        if (FAILED(videoView_.Create(hwnd_, instance_, std::move(videoCallbacks)))) return false;
     }
     CreateMenus();
     SetBarItems();
@@ -710,6 +722,7 @@ void MainWindow::OnThemeChanged() {
     textView_.OnThemeChanged();
     documentView_.OnThemeChanged();
     modelView_.OnThemeChanged();
+    videoView_.OnThemeChanged();
     RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
@@ -846,6 +859,7 @@ void MainWindow::Layout() {
         SetWindowPos(textView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(documentView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(modelView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(videoView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
         InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
@@ -1675,10 +1689,12 @@ void MainWindow::ExitViewer() {
     ShowWindow(textView_.Hwnd(), SW_HIDE);
     ShowWindow(documentView_.Hwnd(), SW_HIDE);
     ShowWindow(modelView_.Hwnd(), SW_HIDE);
+    ShowWindow(videoView_.Hwnd(), SW_HIDE);
     viewer_.Clear();
     textView_.Clear();
     documentView_.Clear();
     modelView_.Clear();
+    videoView_.Clear();
     viewerPageKind_ = ViewerPage::Picture;
     viewerIsText_ = false;
     viewerCache_->Retain({});
@@ -1730,6 +1746,7 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     if (pageKind != ViewerPage::Text) textView_.Clear();
     if (pageKind != ViewerPage::Document) documentView_.Clear();
     if (pageKind != ViewerPage::Model) modelView_.Clear();
+    if (pageKind != ViewerPage::Video) videoView_.Clear();
     if (pageKind == ViewerPage::Text) {
         viewer_.Clear();
         textView_.Show(viewerPath_);
@@ -1739,6 +1756,9 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     } else if (pageKind == ViewerPage::Model) {
         viewer_.Clear();
         modelView_.Show(viewerPath_);
+    } else if (pageKind == ViewerPage::Video) {
+        viewer_.Clear();
+        videoView_.Show(viewerPath_);
     } else {
         ViewerImagePtr image = viewerCache_->Get(viewerKey_, side);
         ThumbnailPtr placeholder;
@@ -1772,7 +1792,8 @@ void MainWindow::ShowViewerPage() {
     // Called in viewer mode when the kind of the current file changes.
     HWND page = ViewerPageHwnd(viewerPageKind_);
     ShowWindow(page, SW_SHOW);
-    for (ViewerPage other : {ViewerPage::Picture, ViewerPage::Text, ViewerPage::Document, ViewerPage::Model}) {
+    for (ViewerPage other : {ViewerPage::Picture, ViewerPage::Text, ViewerPage::Document, ViewerPage::Model,
+                             ViewerPage::Video}) {
         if (other != viewerPageKind_) ShowWindow(ViewerPageHwnd(other), SW_HIDE);
     }
     SetFocus(page);
@@ -1783,6 +1804,7 @@ MainWindow::ViewerPage MainWindow::PageFor(FileKind kind) {
     case FileKind::Text: return ViewerPage::Text;
     case FileKind::Document: return ViewerPage::Document;
     case FileKind::Model: return ViewerPage::Model;
+    case FileKind::Video: return ViewerPage::Video;
     default: return ViewerPage::Picture;  // pictures and PDF pages
     }
 }
@@ -1792,6 +1814,7 @@ HWND MainWindow::ViewerPageHwnd(ViewerPage page) const {
     case ViewerPage::Text: return textView_.Hwnd();
     case ViewerPage::Document: return documentView_.Hwnd();
     case ViewerPage::Model: return modelView_.Hwnd();
+    case ViewerPage::Video: return videoView_.Hwnd();
     default: return viewer_.Hwnd();
     }
 }
@@ -1852,6 +1875,20 @@ void MainWindow::UpdateViewerStatus() {
         default: SetStatusText(2, LoadStr(IDS_DOC_PREVIEW)); break;
         }
         SetStatusText(3, std::wstring());
+    } else if (viewerPageKind_ == ViewerPage::Video) {
+        UINT state = IDS_VIEWER_LOADING;
+        switch (videoView_.GetState()) {
+        case VideoView::State::Playing: state = IDS_VIDEO_PLAYING; break;
+        case VideoView::State::Paused: state = IDS_VIDEO_PAUSED; break;
+        case VideoView::State::Ended: state = IDS_VIDEO_ENDED; break;
+        case VideoView::State::NoCodec: state = IDS_VIDEO_NO_CODEC_SHORT; break;
+        case VideoView::State::Failed: state = IDS_VIDEO_ERROR; break;
+        default: break;
+        }
+        SetStatusText(2, LoadStr(state));
+        SetStatusText(3, videoView_.Duration() > 0
+                             ? FormatMediaTime(videoView_.Position()) + L" / " + FormatMediaTime(videoView_.Duration())
+                             : std::wstring());
     } else if (viewerPageKind_ == ViewerPage::Model) {
         if (modelView_.Loading()) SetStatusText(2, LoadStr(IDS_VIEWER_LOADING));
         else if (modelView_.Failed()) SetStatusText(2, LoadStr(IDS_MODEL_ERROR));
@@ -1915,6 +1952,7 @@ void MainWindow::SetFullscreen(bool fullscreen) {
     textView_.SetFullscreen(fullscreen_);
     documentView_.SetFullscreen(fullscreen_);
     modelView_.SetFullscreen(fullscreen_);
+    videoView_.SetFullscreen(fullscreen_);
     OnSize();
 }
 

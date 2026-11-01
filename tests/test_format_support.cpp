@@ -70,3 +70,22 @@ TEST_CASE("Office documents are recognised by extension") {
     CHECK_FALSE(IsDocumentExtension(L""));
     CHECK_FALSE(IsDocumentExtension(nullptr));
 }
+
+TEST_CASE("video extensions") {
+    CHECK(IsVideoExtension(L".mp4"));
+    CHECK(IsVideoExtension(L".MOV"));
+    CHECK(IsVideoExtension(L".mkv"));
+    CHECK(IsVideoExtension(L".m2ts"));
+    CHECK_FALSE(IsVideoExtension(L".ts"));  // TypeScript
+    CHECK_FALSE(IsVideoExtension(L".jpg"));
+    CHECK_FALSE(IsVideoExtension(L""));
+    CHECK_FALSE(IsVideoExtension(nullptr));
+}
+
+TEST_CASE("media times") {
+    constexpr long long kSecond = 10000000;
+    CHECK(FormatMediaTime(0) == L"0:00");
+    CHECK(FormatMediaTime(-5) == L"0:00");
+    CHECK(FormatMediaTime(65 * kSecond + kSecond / 2) == L"1:05");
+    CHECK(FormatMediaTime((3600 + 2 * 60 + 3) * kSecond) == L"1:02:03");
+}

@@ -144,6 +144,27 @@ bool IsDocumentExtension(const wchar_t* extension) noexcept {
     return false;
 }
 
+bool IsVideoExtension(const wchar_t* extension) noexcept {
+    static const wchar_t* const kVideos[] = {L".mp4", L".m4v", L".mov", L".avi", L".wmv", L".asf", L".mkv",
+                                            L".webm", L".mpg", L".mpeg", L".m2ts", L".mts", L".3gp", L".3g2"};
+    if (!extension || !*extension) return false;
+    for (const wchar_t* known : kVideos) {
+        if (_wcsicmp(extension, known) == 0) return true;
+    }
+    return false;
+}
+
+std::wstring FormatMediaTime(long long hundredNanoseconds) {
+    long long seconds = hundredNanoseconds > 0 ? hundredNanoseconds / 10000000 : 0;
+    const long long hours = seconds / 3600;
+    const long long minutes = seconds / 60 % 60;
+    seconds %= 60;
+    wchar_t text[32] = {};
+    if (hours > 0) swprintf(text, 32, L"%lld:%02lld:%02lld", hours, minutes, seconds);
+    else swprintf(text, 32, L"%lld:%02lld", minutes, seconds);
+    return text;
+}
+
 const wchar_t* CodecPackName(CodecPack pack) noexcept {
     const PackInfo* info = Info(pack);
     return info ? info->name : L"";

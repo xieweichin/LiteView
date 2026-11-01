@@ -45,7 +45,8 @@ HRESULT ShellFitted(const std::wstring& path, UINT boxWidth, UINT boxHeight, HBI
 
 HRESULT DecodeFitted(const std::wstring& path, UINT boxWidth, UINT boxHeight, HBITMAP& bitmap, UINT& width,
                      UINT& height) {
-    if (IsDocumentExtension(PathFindExtensionW(path.c_str()))) return ShellFitted(path, boxWidth, boxHeight, bitmap, width, height);
+    if (IsDocumentExtension(PathFindExtensionW(path.c_str())) || IsVideoExtension(PathFindExtensionW(path.c_str())))
+        return ShellFitted(path, boxWidth, boxHeight, bitmap, width, height);
     ImageDecoder decoder;
     DecodedImage image;
     HRESULT hr = decoder.Decode(path, std::max(boxWidth, boxHeight), image);

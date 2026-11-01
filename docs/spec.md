@@ -92,6 +92,7 @@ Nov 1, 2026 · @偉欽
 - **Office 文件**：Word、Excel、PowerPoint、OpenDocument、RTF、XPS 等。借用 Windows 的「預覽處理常式」（檔案總管預覽窗格同一套），有安裝 Office 或對應軟體才看得到；縮圖與預覽窗格用系統縮圖，檢視模式顯示完整文件。沒有預覽程式時顯示說明文字。啟動預覽程式可能要一兩秒。
 - **向量圖**：SVG 由 Direct2D 繪製（Windows 10 1703 以上），EMF／WMF 由 GDI+ 繪製，放大時重新繪製保持清晰；AI（PDF 相容格式）走 PDF 路線；EPS 走系統預覽處理常式，需另裝對應軟體。
 - **3D 模型**：STL（二進位與文字）、OBJ、glTF／GLB（glTF 2.0）、3MF。程式自帶小型軟體繪圖（不需顯示卡驅動），縮圖與預覽窗格顯示斜上方視角；檢視模式是轉盤檢視：載入後慢慢自轉，滑鼠拖曳旋轉、上下鍵調仰角、Ctrl+滾輪或 +/- 縮放、/ 或滑鼠中鍵重設，Ctrl+[ ／ Ctrl+] 每次轉 15 度。只讀幾何與單色材質（glTF 基本色、3MF 顏色），貼圖、Draco 壓縮等擴充不支援；超過 1,000 萬個三角形不開啟，太重的模型不自轉。
+- **影片**：MP4、M4V、MOV、AVI、WMV、ASF、MKV、WebM、MPEG、M2TS／MTS、3GP。縮圖與預覽窗格用系統縮圖；檢視模式用 Windows 內建的 Media Foundation 播放（自動開始），底部有播放鍵、進度條與時間：空白鍵播放／暫停，←／→ 快轉倒轉 5 秒，點畫面播放／暫停，點進度條跳到該處；PageUp/PageDown 或滾輪換檔。HEVC、AV1、VP9 等格式需要 Windows 視訊延伸模組，缺少時畫面會提示，按一下開啟 Microsoft Store。
 
 | 指標 | 目標 |
 | --- | --- |

@@ -12,7 +12,7 @@
 #include "core/ThreadPool.h"
 
 // What the viewer does with a file: decode it with WIC, or show it as text.
-enum class FileKind : std::uint8_t { Image, Text, Pdf, Document, Vector, Model };
+enum class FileKind : std::uint8_t { Image, Text, Pdf, Document, Vector, Model, Video };
 
 struct FileItem {
     std::wstring name;
