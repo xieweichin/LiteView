@@ -46,20 +46,20 @@ TEST_CASE("viewer cache decodes at screen size and upgrades to full size on requ
     REQUIRE(waiter.WaitFor(1));
     CHECK(waiter.results[0].second == S_OK);
 
-    ViewerImagePtr small = cache.Get(path, 8);
-    REQUIRE(static_cast<bool>(small));
-    CHECK(std::max(small->width, small->height) <= 8u);
-    CHECK(small->pixels.size() == static_cast<std::size_t>(small->width) * small->height * 4);
-    const bool alreadyFull = small->IsFullSize();
+    ViewerImagePtr reduced = cache.Get(path, 8);
+    REQUIRE(static_cast<bool>(reduced));
+    CHECK(std::max(reduced->width, reduced->height) <= 8u);
+    CHECK(reduced->pixels.size() == static_cast<std::size_t>(reduced->width) * reduced->height * 4);
+    const bool alreadyFull = reduced->IsFullSize();
 
-    // The small decode does not satisfy a full-size request unless the picture is tiny.
+    // The reduced decode does not satisfy a full-size request unless the picture is tiny.
     CHECK(static_cast<bool>(cache.Get(path, 0)) == alreadyFull);
     cache.Request(path, 0, true);
     if (!alreadyFull) REQUIRE(waiter.WaitFor(2));
     ViewerImagePtr full = cache.Get(path, 0);
     REQUIRE(static_cast<bool>(full));
     CHECK(full->IsFullSize());
-    CHECK(full->width == small->originalWidth);
+    CHECK(full->width == reduced->originalWidth);
     // GetAny prefers the sharpest picture.
     CHECK(cache.GetAny(path)->pixels.size() == full->pixels.size());
 }
