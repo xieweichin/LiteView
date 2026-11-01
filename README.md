@@ -1,5 +1,7 @@
 # LiteView
 
+<img src="docs/images/liteview-logo.png" alt="LiteView 標誌" width="160">
+
 輕巧、快速的 Windows 看圖程式，操作方式比照 ACDSee 3.2：瀏覽模式（資料夾樹＋縮圖清單＋預覽窗）與檢視模式（單張看圖）用 Enter 切換。
 
 - 規格：[docs/spec.md](docs/spec.md)
