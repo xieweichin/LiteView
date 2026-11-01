@@ -19,6 +19,7 @@
 #include "core/BatchRename.h"
 #include "core/FileOps.h"
 #include "core/FormatSupport.h"
+#include "core/PdfRenderer.h"
 #include "core/Rotator.h"
 #include "core/Settings.h"
 #include "core/ThreadPool.h"
@@ -518,7 +519,7 @@ bool MainWindow::OnCreate() {
     callbacks.navigate = [this](int step) { ViewerStep(step); };
     callbacks.exit = [this] { ExitViewer(); };
     callbacks.needFullSize = [this] {
-        if (!viewerPath_.empty()) viewerCache_->Request(viewerPath_, 0, true);
+        if (!viewerKey_.empty()) viewerCache_->Request(viewerKey_, 0, true);
     };
     callbacks.viewChanged = [this] { UpdateViewerStatus(); };
     if (FAILED(viewer_.Create(hwnd_, instance_, std::move(callbacks)))) return false;
@@ -1049,6 +1050,12 @@ void MainWindow::OnCommand(UINT id) {
     case IDM_BAR_VIEW:
     case IDM_BAR_MORE:
         ShowBarMenu(id, false);
+        break;
+    case IDM_PAGE_NEXT:
+        StepPdfPage(1);
+        break;
+    case IDM_PAGE_PREV:
+        StepPdfPage(-1);
         break;
     case IDM_HELP_CODECS:
         ShowCodecInfo();
@@ -1674,6 +1681,8 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     if (index < 0 || static_cast<std::size_t>(index) >= count) return;
     viewerItemId_ = model_->At(static_cast<std::size_t>(index)).id;
     viewerPath_ = model_->FullPath(static_cast<std::size_t>(index));
+    viewerPage_ = 0;
+    viewerKey_ = viewerPath_;
     viewerDirection_ = direction;
     const UINT side = ScreenSide();
 
@@ -1687,13 +1696,13 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
         textView_.Show(viewerPath_);
     } else {
         textView_.Clear();
-        ViewerImagePtr image = viewerCache_->Get(viewerPath_, side);
+        ViewerImagePtr image = viewerCache_->Get(viewerKey_, side);
         ThumbnailPtr placeholder;
         if (!image) {
             placeholder = thumbnails_->TryGetCached(list_->MakeThumbnailRequest(index));
-            viewerCache_->Request(viewerPath_, side, true);
+            viewerCache_->Request(viewerKey_, side, true);
         }
-        viewer_.SetImage(viewerPath_, image, placeholder, viewerCache_->Failed(viewerPath_));
+        viewer_.SetImage(viewerKey_, image, placeholder, viewerCache_->Failed(viewerKey_));
     }
 
     // Preload the neighbours, the one in the travel direction first, and
@@ -1702,7 +1711,7 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     for (int offset : {direction, -direction}) {
         const int neighbour = index + offset;
         if (neighbour < 0 || static_cast<std::size_t>(neighbour) >= count) continue;
-        if (model_->At(static_cast<std::size_t>(neighbour)).kind != FileKind::Image) continue;
+        if (model_->At(static_cast<std::size_t>(neighbour)).kind == FileKind::Text) continue;
         const std::wstring path = model_->FullPath(static_cast<std::size_t>(neighbour));
         keep.push_back(path);
         viewerCache_->Request(path, side, false);
@@ -1723,14 +1732,40 @@ void MainWindow::ShowViewerPage() {
     SetFocus(page);
 }
 
+void MainWindow::StepPdfPage(int step) {
+    if (mode_ != Mode::Viewer || viewerIsText_ || !IsPdfPath(viewerPath_)) return;
+    // The page count is known once any page of this document has decoded.
+    const ViewerImagePtr current = viewerCache_->GetAny(viewerKey_);
+    if (!current || current->pageCount == 0) return;
+    const int page = static_cast<int>(viewerPage_) + step;
+    if (page < 0 || page >= static_cast<int>(current->pageCount)) {
+        MessageBeep(MB_OK);
+        return;
+    }
+    viewerPage_ = static_cast<UINT>(page);
+    viewerKey_ = PdfPagePath(viewerPath_, viewerPage_);
+    const UINT side = ScreenSide();
+    ViewerImagePtr image = viewerCache_->Get(viewerKey_, side);
+    if (!image) viewerCache_->Request(viewerKey_, side, true);
+    viewer_.SetImage(viewerKey_, image, nullptr, viewerCache_->Failed(viewerKey_));
+    // Render the following page ahead and keep the neighbours of the file.
+    std::vector<std::wstring> keep{viewerKey_};
+    if (viewerPage_ + 1 < current->pageCount) {
+        keep.push_back(PdfPagePath(viewerPath_, viewerPage_ + 1));
+        viewerCache_->Request(keep.back(), side, false);
+    }
+    viewerCache_->Retain(keep);
+    UpdateViewerStatus();
+}
+
 void MainWindow::RefreshViewerImage() {
     if (mode_ != Mode::Viewer || viewerPath_.empty() || viewerIsText_) return;
     // Prefer the sharpest decode we have for the current picture.
-    ViewerImagePtr image = viewerCache_->GetAny(viewerPath_);
+    ViewerImagePtr image = viewerCache_->GetAny(viewerKey_);
     if (image) {
-        viewer_.SetImage(viewerPath_, image, nullptr, false);
-    } else if (viewerCache_->Failed(viewerPath_)) {
-        viewer_.SetImage(viewerPath_, nullptr, nullptr, true);
+        viewer_.SetImage(viewerKey_, image, nullptr, false);
+    } else if (viewerCache_->Failed(viewerKey_)) {
+        viewer_.SetImage(viewerKey_, nullptr, nullptr, true);
     }
     UpdateViewerStatus();
 }
@@ -1757,7 +1792,16 @@ void MainWindow::UpdateViewerStatus() {
         }
         SetStatusText(3, Format(LoadStr(IDS_VIEWER_ZOOM), static_cast<std::size_t>(textView_.ZoomPercent())));
     } else if (viewer_.HasImage()) {
-        SetStatusText(2, std::to_wstring(viewer_.ImageWidth()) + L" × " + std::to_wstring(viewer_.ImageHeight()));
+        const ViewerImagePtr shown = viewerCache_->GetAny(viewerKey_);
+        if (shown && shown->pageCount > 0) {
+            // PDF: page position instead of pixel size.
+            std::wstring pages = LoadStr(IDS_PDF_PAGE);
+            const auto first = pages.find(L"%u");
+            if (first != std::wstring::npos) pages.replace(first, 2, std::to_wstring(viewerPage_ + 1));
+            SetStatusText(2, Format(pages, shown->pageCount));
+        } else {
+            SetStatusText(2, std::to_wstring(viewer_.ImageWidth()) + L" × " + std::to_wstring(viewer_.ImageHeight()));
+        }
         const auto percent = static_cast<std::size_t>(viewer_.EffectiveScale() * 100.0 + 0.5);
         SetStatusText(3, Format(LoadStr(IDS_VIEWER_ZOOM), percent));
     } else {

@@ -1,6 +1,7 @@
 #include "core/ImageDecoder.h"
 
 #include "core/Metadata.h"
+#include "core/PdfRenderer.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -50,6 +51,20 @@ HRESULT ImageDecoder::Decode(const std::wstring& path, UINT maxSide, DecodedImag
     out = {};
     if (path.empty()) return E_INVALIDARG;
     try {
+        if (IsPdfPath(path)) {
+            std::wstring file;
+            UINT page = 0;
+            SplitPdfPagePath(path, file, page);
+            DecodedImage result;
+            UINT fullWidth = 0, fullHeight = 0;
+            const HRESULT hr = RenderPdfPage(file, page, maxSide, result.bitmap, result.width, result.height,
+                                             fullWidth, fullHeight, result.pageCount);
+            if (FAILED(hr)) return hr;
+            result.originalWidth = fullWidth;
+            result.originalHeight = fullHeight;
+            out = std::move(result);
+            return S_OK;
+        }
         ComPtr<IWICImagingFactory> factory;
         HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                       IID_PPV_ARGS(factory.GetAddressOf()));

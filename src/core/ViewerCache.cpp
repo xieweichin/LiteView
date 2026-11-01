@@ -197,6 +197,7 @@ void ViewerCache::Decode(const std::shared_ptr<Shared>& shared, std::wstring pat
             image->originalWidth = decoded.originalWidth;
             image->originalHeight = decoded.originalHeight;
             image->maxSide = maxSide;
+            image->pageCount = decoded.pageCount;
             const UINT stride = decoded.width * 4;
             image->pixels.resize(static_cast<std::size_t>(stride) * decoded.height);
             hr = decoded.bitmap->CopyPixels(nullptr, stride, static_cast<UINT>(image->pixels.size()),

@@ -12,6 +12,7 @@ struct DecodedImage {
     UINT height = 0;
     UINT originalWidth = 0;   // dimensions after applying EXIF orientation
     UINT originalHeight = 0;
+    UINT pageCount = 0;       // PDF: pages in the document; 0 for pictures
 };
 
 // Callers must initialize COM on their calling thread, and obey COM apartment
@@ -20,5 +21,6 @@ struct DecodedImage {
 class ImageDecoder {
 public:
     // maxSide = 0 keeps original size; otherwise downscale without enlarging.
+    // A PDF path (optionally "<file>|<page>", see PdfRenderer.h) renders a page.
     HRESULT Decode(const std::wstring& path, UINT maxSide, DecodedImage& out) const noexcept;
 };

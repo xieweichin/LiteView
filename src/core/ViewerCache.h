@@ -22,6 +22,7 @@ struct ViewerImage {
     UINT originalWidth = 0;    // upright full size
     UINT originalHeight = 0;
     UINT maxSide = 0;          // what was asked for; 0 = original size
+    UINT pageCount = 0;        // PDF documents only
     std::vector<BYTE> pixels;  // stride = width * 4
 
     bool IsFullSize() const { return width == originalWidth && height == originalHeight; }

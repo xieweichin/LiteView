@@ -39,6 +39,7 @@ endif()
 add_library(LiteViewCore STATIC
     src/core/FolderModel.cpp
     src/core/FormatSupport.cpp
+    src/core/PdfRenderer.cpp
     src/core/TextDocument.cpp
     src/core/ImageDecoder.cpp
     src/core/Metadata.cpp
@@ -50,7 +51,7 @@ add_library(LiteViewCore STATIC
     src/core/FileOps.cpp
     src/core/BatchRename.cpp)
 target_include_directories(LiteViewCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(LiteViewCore PUBLIC liteview_options windowscodecs shlwapi shell32 ole32 uuid)
+target_link_libraries(LiteViewCore PUBLIC liteview_options windowscodecs shlwapi shell32 ole32 uuid runtimeobject shcore)
 
 # ---- Application ------------------------------------------------------------
 add_executable(LiteView WIN32

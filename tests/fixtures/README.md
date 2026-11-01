@@ -8,3 +8,4 @@ The eight JPEGs share the same four colored quadrants and differ in EXIF
 orientation. They also contain known camera and exposure tags. The PNG tests
 premultiplied alpha, the GIF has two different frames, and the damaged JPEG
 tests failure handling.
+The PDF has two pages (200×100 and 100×200 points) with a red box, for the Windows.Data.Pdf renderer tests.
