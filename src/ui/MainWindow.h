@@ -1,0 +1,46 @@
+#pragma once
+
+#include <windows.h>
+
+#include <string>
+
+// Top-level frame: menu, toolbar, status bar, and (from T4 on) the browser
+// and viewer panes. Owns the per-mode accelerator tables.
+class MainWindow {
+public:
+    enum class Mode { Browser, Viewer };
+
+    MainWindow() = default;
+    MainWindow(const MainWindow&) = delete;
+    MainWindow& operator=(const MainWindow&) = delete;
+
+    bool Create(HINSTANCE instance, int showCommand);
+    HWND Hwnd() const { return hwnd_; }
+
+    // Call from the message loop before TranslateMessage/DispatchMessage.
+    bool TranslateAccelerator(MSG* msg);
+
+private:
+    static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
+
+    bool OnCreate();
+    void OnSize();
+    void OnCommand(UINT id);
+    LRESULT OnNotify(NMHDR* header);
+    void OnDpiChanged(UINT dpi, const RECT* suggested);
+
+    void CreateToolbar();
+    void CreateStatusBar();
+    void UpdateStatusParts();
+    std::wstring LoadStr(UINT id) const;
+
+    HINSTANCE instance_ = nullptr;
+    HWND hwnd_ = nullptr;
+    HWND toolbar_ = nullptr;
+    HWND status_ = nullptr;
+    HACCEL accelBrowser_ = nullptr;
+    HACCEL accelViewer_ = nullptr;
+    Mode mode_ = Mode::Browser;
+    UINT dpi_ = USER_DEFAULT_SCREEN_DPI;
+};
