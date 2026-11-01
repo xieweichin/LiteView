@@ -104,7 +104,7 @@ TEST_CASE("folder listing filters WIC extensions and sorts in the background") {
     fixture.AddFile(fixture.first, L"img2.JPG", 3, baseTime + 30000000);
     fixture.AddFile(fixture.first, L"img10.jpg", 1, baseTime + 10000000);
     fixture.AddFile(fixture.first, L"alpha.png", 2, baseTime + 20000000);
-    fixture.AddFile(fixture.first, L"ignore.txt", 4, baseTime + 40000000);
+    fixture.AddFile(fixture.first, L"ignore.bin", 4, baseTime + 40000000);
     fixture.AddDirectory(fixture.first + L"\\folder.jpg");
 
     Notifications notifications;
@@ -170,7 +170,12 @@ TEST_CASE("files that need a missing codec extension are counted, not listed") {
     REQUIRE(generation != 0);
     REQUIRE(notifications.Wait(1));
     REQUIRE(model.Commit(generation) == S_OK);
-    CHECK(model.Count() == 1u + (heic ? 1u : 0u) + (cr3 ? 1u : 0u));
+    REQUIRE(model.Count() == 2u + (heic ? 1u : 0u) + (cr3 ? 1u : 0u));
+    // Text files are listed as text; pictures as images.
+    for (std::size_t i = 0; i < model.Count(); ++i) {
+        const FileItem& item = model.At(i);
+        CHECK((item.kind == FileKind::Text) == (item.name == L"d.txt"));
+    }
     CodecGap gap = model.MissingCodecs();
     CHECK(gap.files == (heic ? 0u : 1u) + (cr3 ? 0u : 1u));
     CHECK(((gap.packs & CodecPackBit(CodecPack::Heif)) != 0) == !heic);

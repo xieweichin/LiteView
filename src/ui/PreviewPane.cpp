@@ -3,9 +3,12 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <shlwapi.h>
+
 #include <algorithm>
 
 #include "core/ImageDecoder.h"
+#include "core/TextDocument.h"
 #include "core/ThreadPool.h"
 #include "ui/Messages.h"
 #include "ui/Theme.h"
@@ -17,6 +20,7 @@ namespace {
 constexpr wchar_t kClassName[] = L"LiteViewPreviewPane";
 constexpr UINT_PTR kDebounceTimer = 1;
 constexpr UINT kDebounceMs = 60;
+constexpr std::size_t kPreviewTextBytes = 32 * 1024;
 
 struct ThreadCom {
     HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -74,6 +78,7 @@ PreviewPane::~PreviewPane() {
     }
     pool_->Shutdown();
     if (shared_->bitmap) DeleteObject(shared_->bitmap);
+    if (textFont_) DeleteObject(textFont_);
 }
 
 HRESULT PreviewPane::Create(HWND parent, HINSTANCE instance) {
@@ -158,6 +163,10 @@ void PreviewPane::Show(const std::wstring& path) {
             DeleteObject(shared_->bitmap);
             shared_->bitmap = nullptr;
         }
+        if (path.empty()) {
+            shared_->text.clear();
+            shared_->hasText = false;
+        }
     }
     pool_->CancelPending();
     if (path.empty()) {
@@ -194,6 +203,19 @@ void PreviewPane::Decode(const std::shared_ptr<Shared>& shared, unsigned token, 
         std::lock_guard<std::mutex> lock(shared->mutex);
         if (shared->token != token) return;
     }
+    if (IsTextExtension(PathFindExtensionW(path.c_str()))) {
+        TextDocument document;
+        const HRESULT hr = LoadTextFile(path, kPreviewTextBytes, document);
+        std::lock_guard<std::mutex> lock(shared->mutex);
+        if (shared->token != token) return;
+        if (shared->bitmap) DeleteObject(shared->bitmap);
+        shared->bitmap = nullptr;
+        shared->text = SUCCEEDED(hr) ? std::move(document.text) : std::wstring();
+        shared->hasText = SUCCEEDED(hr);
+        shared->bitmapToken = token;
+        if (shared->hwnd) PostMessageW(shared->hwnd, WM_APP_PREVIEW_READY, 0, 0);
+        return;
+    }
     thread_local ThreadCom com;
     HBITMAP bitmap = nullptr;
     UINT width = 0, height = 0;
@@ -207,6 +229,8 @@ void PreviewPane::Decode(const std::shared_ptr<Shared>& shared, unsigned token, 
     }
     if (shared->bitmap) DeleteObject(shared->bitmap);
     shared->bitmap = SUCCEEDED(hr) ? bitmap : nullptr;  // a broken file shows an empty pane
+    shared->text.clear();
+    shared->hasText = false;
     shared->width = width;
     shared->height = height;
     shared->bitmapToken = token;
@@ -224,7 +248,27 @@ void PreviewPane::OnPaint() {
     FillRect(memory, &rc, theme::SurfaceBrush());
     {
         std::lock_guard<std::mutex> lock(shared_->mutex);
-        if (shared_->bitmap && !path_.empty()) {
+        if (shared_->hasText && !path_.empty()) {
+            // First lines of a text file, top-left, in a small monospaced font.
+            const UINT dpi = GetDpiForWindow(hwnd_);
+            if (!textFont_ || textFontDpi_ != dpi) {
+                if (textFont_) DeleteObject(textFont_);
+                textFont_ = CreateFontW(-MulDiv(9, static_cast<int>(dpi), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                        FIXED_PITCH | FF_MODERN, L"Consolas");
+                textFontDpi_ = dpi;
+            }
+            const int pad = MulDiv(8, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
+            RECT box{pad, pad, std::max(pad, static_cast<int>(rc.right) - pad), std::max(pad, static_cast<int>(rc.bottom) - pad)};
+            HGDIOBJ oldFont = SelectObject(memory, textFont_ ? static_cast<HGDIOBJ>(textFont_) : GetStockObject(ANSI_FIXED_FONT));
+            SetBkMode(memory, TRANSPARENT);
+            SetTextColor(memory, theme::Current().text);
+            // DrawText is slow on huge strings; the pane never shows more than a few KB.
+            const int length = static_cast<int>(std::min<std::size_t>(shared_->text.size(), 8192));
+            DrawTextW(memory, shared_->text.c_str(), length, &box,
+                      DT_LEFT | DT_TOP | DT_WORDBREAK | DT_EDITCONTROL | DT_EXPANDTABS | DT_NOPREFIX);
+            SelectObject(memory, oldFont);
+        } else if (shared_->bitmap && !path_.empty()) {
             // Fit (never enlarge) and centre.
             const UINT w = shared_->width, h = shared_->height;
             const double scale = std::min({1.0, static_cast<double>(rc.right) / w, static_cast<double>(rc.bottom) / h});

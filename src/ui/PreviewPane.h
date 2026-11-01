@@ -9,7 +9,7 @@
 class ThreadPool;
 
 // Bottom-left preview of the selected picture, fitted into the pane and
-// centred, never enlarged. Decoding runs on its own background thread;
+// centred, never enlarged; a text file shows its first lines. Decoding runs on its own background thread;
 // only the latest request is kept.
 class PreviewPane {
 public:
@@ -34,6 +34,8 @@ private:
         UINT width = 0;
         UINT height = 0;
         unsigned bitmapToken = 0;
+        std::wstring text;    // a text file's first lines (shown instead of a bitmap)
+        bool hasText = false;
     };
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -44,6 +46,8 @@ private:
                        UINT boxHeight) noexcept;
 
     HWND hwnd_ = nullptr;
+    HFONT textFont_ = nullptr;
+    UINT textFontDpi_ = 0;
     std::wstring path_;
     SIZE decodedFor_{};  // pane size of the last decode
     std::shared_ptr<Shared> shared_;

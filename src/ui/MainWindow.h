@@ -14,6 +14,7 @@
 #include "ui/FileListView.h"
 #include "ui/FolderTree.h"
 #include "ui/PreviewPane.h"
+#include "ui/TextView.h"
 #include "ui/ViewerView.h"
 #include "core/ViewerCache.h"
 
@@ -212,4 +213,7 @@ private:
     PreviewPane preview_;
     std::unique_ptr<ViewerCache> viewerCache_;
     ViewerView viewer_;
+    TextView textView_;      // viewer mode for text files
+    bool viewerIsText_ = false;
+    void ShowViewerPage();   // the picture or text page, whichever is current
 };

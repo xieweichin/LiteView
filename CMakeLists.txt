@@ -39,6 +39,7 @@ endif()
 add_library(LiteViewCore STATIC
     src/core/FolderModel.cpp
     src/core/FormatSupport.cpp
+    src/core/TextDocument.cpp
     src/core/ImageDecoder.cpp
     src/core/Metadata.cpp
     src/core/Settings.cpp
@@ -61,6 +62,8 @@ add_executable(LiteView WIN32
     src/ui/FolderTree.cpp
     src/ui/FolderTree.h
     src/ui/PreviewPane.cpp
+    src/ui/TextView.cpp
+    src/ui/TextView.h
     src/ui/PreviewPane.h
     src/ui/ViewerView.cpp
     src/ui/PropertiesDialog.cpp
