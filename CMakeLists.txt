@@ -42,7 +42,8 @@ add_library(LiteViewCore STATIC
     src/core/Metadata.cpp
     src/core/Settings.cpp
     src/core/ThreadPool.cpp
-    src/core/ThumbnailService.cpp)
+    src/core/ThumbnailService.cpp
+    src/core/ViewerCache.cpp)
 target_include_directories(LiteViewCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(LiteViewCore PUBLIC liteview_options windowscodecs shlwapi shell32 ole32 uuid)
 
@@ -57,13 +58,15 @@ add_executable(LiteView WIN32
     src/ui/FolderTree.h
     src/ui/PreviewPane.cpp
     src/ui/PreviewPane.h
+    src/ui/ViewerView.cpp
+    src/ui/ViewerView.h
     src/ui/Messages.h
     src/ui/Commands.h
     src/res/resource.h
     src/res/LiteView.rc)
 target_include_directories(LiteView PRIVATE src src/res)
 target_link_libraries(LiteView PRIVATE LiteViewCore liteview_options
-    comctl32 shlwapi ole32 shell32 uuid uxtheme msimg32)
+    comctl32 shlwapi ole32 shell32 uuid uxtheme msimg32 d2d1)
 
 if(MSVC)
     # The manifest is embedded by LiteView.rc.

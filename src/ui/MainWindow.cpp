@@ -28,6 +28,7 @@ constexpr int kMinHeight = 320;
 constexpr UINT kSettingsReady = WM_APP_SETTINGS_READY;
 constexpr UINT kSettingsSaved = WM_APP_SETTINGS_SAVED;
 constexpr UINT_PTR kSettingsTimer = 1;
+constexpr UINT_PTR kSlideshowTimer = 2;
 constexpr UINT kIdTree = 10;
 constexpr UINT kIdList = 11;
 constexpr UINT kIdPathBar = 12;
@@ -148,6 +149,7 @@ MainWindow::~MainWindow() {
     // Stop folder loads and thumbnail work before the pool goes away.
     list_.reset();
     thumbnails_.reset();
+    viewerCache_.reset();
     model_.reset();
     if (pool_) pool_->Shutdown();
 }
@@ -245,6 +247,16 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         OnClose();
         return 0;
     case WM_TIMER:
+        if (wParam == kSlideshowTimer) {
+            if (mode_ == Mode::Viewer && model_->Count() > 0) {
+                const int index = ViewerIndex();
+                const int next = (index + 1) % static_cast<int>(model_->Count());  // wraps to the first picture
+                ShowViewerIndex(next, 1);
+            } else {
+                StopSlideshow();
+            }
+            return 0;
+        }
         if (wParam == kSettingsTimer) {
             KillTimer(hwnd_, kSettingsTimer);
             if (!closing_) {
@@ -267,6 +279,9 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_APP_THUMB_READY:
         if (list_) list_->OnThumbnailReady(static_cast<std::uint32_t>(wParam), static_cast<std::uint32_t>(lParam));
         return 0;
+    case WM_APP_VIEWER_READY:
+        RefreshViewerImage();
+        return 0;
     case WM_APP_TREE_CHILDREN:
         tree_.OnChildrenReady();
         return 0;
@@ -281,7 +296,11 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         OnInitMenuPopup(reinterpret_cast<HMENU>(wParam));
         return 0;
     case WM_SETFOCUS:
-        if (list_ && list_->Hwnd()) SetFocus(list_->Hwnd());
+        if (mode_ == Mode::Viewer && viewer_.Hwnd()) {
+            SetFocus(viewer_.Hwnd());
+        } else if (list_ && list_->Hwnd()) {
+            SetFocus(list_->Hwnd());
+        }
         return 0;
     case WM_SETCURSOR:
         if (reinterpret_cast<HWND>(wParam) == hwnd_ && LOWORD(lParam) == HTCLIENT && OnSetCursor()) return TRUE;
@@ -345,10 +364,23 @@ bool MainWindow::OnCreate() {
         ThumbnailService::Options{});
     list_->SetThumbnailService(thumbnails_.get());
 
+    viewerCache_ = std::make_unique<ViewerCache>([hwnd](const std::wstring&, HRESULT) {
+        PostMessageW(hwnd, WM_APP_VIEWER_READY, 0, 0);
+    });
+    ViewerView::Callbacks callbacks;
+    callbacks.navigate = [this](int step) { ViewerStep(step); };
+    callbacks.exit = [this] { ExitViewer(); };
+    callbacks.needFullSize = [this] {
+        if (!viewerPath_.empty()) viewerCache_->Request(viewerPath_, 0, true);
+    };
+    callbacks.viewChanged = [this] { UpdateViewerStatus(); };
+    if (FAILED(viewer_.Create(hwnd_, instance_, std::move(callbacks)))) return false;
+    menu_ = GetMenu(hwnd_);
+
     tree_.SetNavigateCallback([this](const std::wstring& path) { Navigate(path); });
     list_->SetColumnClickCallback([this](SortKey key) { OnSortCommand(key); });
     list_->SetSelectionChangedCallback([this] { RequestStatusUpdate(); });
-    list_->SetActivateCallback([](int) { /* T6: open the viewer */ });
+    list_->SetActivateCallback([this](int index) { EnterViewer(index); });
     return true;
 }
 
@@ -474,6 +506,16 @@ void MainWindow::Layout() {
     ReleaseDC(pathBar_, dc);
     const int pathHeight = tm.tmHeight + Scale(8, dpi_);
 
+    if (mode_ == Mode::Viewer) {
+        // The picture takes everything between toolbar and status bar
+        // (the whole client area in full screen).
+        const int viewerTop = fullscreen_ ? 0 : top;
+        const int viewerBottom = fullscreen_ ? rc.bottom : bottom;
+        SetWindowPos(viewer_.Hwnd(), nullptr, 0, viewerTop, rc.right, viewerBottom - viewerTop,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        return;
+    }
+
     HDWP dwp = BeginDeferWindowPos(4);
     auto place = [&](HWND child, int x, int y, int w, int h) {
         if (dwp) dwp = DeferWindowPos(dwp, child, nullptr, x, y, std::max(w, 0), std::max(h, 0),
@@ -499,7 +541,7 @@ void MainWindow::Layout() {
 }
 
 MainWindow::Splitter MainWindow::HitTestSplitter(POINT pt) const {
-    if (!PtInRect(&content_, pt)) return Splitter::None;
+    if (mode_ != Mode::Browser || !PtInRect(&content_, pt)) return Splitter::None;
     const int splitter = Scale(kSplitter, dpi_);
     RECT treeRect{};
     GetWindowRect(tree_.Hwnd(), &treeRect);
@@ -585,13 +627,59 @@ void MainWindow::OnCommand(UINT id) {
         break;
     }
     case IDM_NAV_PARENT_FOLDER:
-        NavigateToParent();
+        if (mode_ == Mode::Browser) NavigateToParent();
         break;
+    case IDM_NAV_TOGGLE_MODE:
+        if (mode_ == Mode::Viewer) {
+            ExitViewer();
+        } else {
+            EnterViewer(list_->FocusedIndex());
+        }
+        break;
+    case IDM_NAV_EXIT_VIEWER:
+        if (mode_ == Mode::Viewer) ExitViewer();
+        break;
+    case IDM_NAV_NEXT:
+        StopSlideshow();
+        ViewerStep(+1);
+        break;
+    case IDM_NAV_PREV:
+        StopSlideshow();
+        ViewerStep(-1);
+        break;
+    case IDM_NAV_FIRST:
+        StopSlideshow();
+        if (mode_ == Mode::Viewer && model_->Count() > 0) ShowViewerIndex(0, 1);
+        break;
+    case IDM_NAV_LAST:
+        StopSlideshow();
+        if (mode_ == Mode::Viewer && model_->Count() > 0) ShowViewerIndex(static_cast<int>(model_->Count()) - 1, -1);
+        break;
+    case IDM_ZOOM_IN:
+        if (mode_ == Mode::Viewer) viewer_.ZoomIn();
+        break;
+    case IDM_ZOOM_OUT:
+        if (mode_ == Mode::Viewer) viewer_.ZoomOut();
+        break;
+    case IDM_ZOOM_TOGGLE_FIT:
+        if (mode_ == Mode::Viewer) viewer_.ToggleFit();
+        break;
+    case IDM_VIEW_FULLSCREEN:
+        if (mode_ == Mode::Browser) EnterViewer(list_->FocusedIndex());
+        if (mode_ == Mode::Viewer) SetFullscreen(!fullscreen_);
+        break;
+    case IDM_VIEW_SLIDESHOW:
+        ToggleSlideshow();
+        break;
+    case IDM_SLIDESHOW_2S: slideshowSeconds_ = 2; if (slideshow_) { StopSlideshow(); ToggleSlideshow(); } break;
+    case IDM_SLIDESHOW_3S: slideshowSeconds_ = 3; if (slideshow_) { StopSlideshow(); ToggleSlideshow(); } break;
+    case IDM_SLIDESHOW_5S: slideshowSeconds_ = 5; if (slideshow_) { StopSlideshow(); ToggleSlideshow(); } break;
+    case IDM_SLIDESHOW_10S: slideshowSeconds_ = 10; if (slideshow_) { StopSlideshow(); ToggleSlideshow(); } break;
     case IDM_VIEW_REFRESH:
-        Refresh();
+        if (mode_ == Mode::Browser) Refresh();
         break;
     case IDM_EDIT_SELECT_ALL:
-        list_->SelectAll();
+        if (mode_ == Mode::Browser) list_->SelectAll();
         break;
     case IDM_VIEW_THUMBNAILS: SetViewMode(FileListView::ViewMode::Thumbnails); break;
     case IDM_VIEW_LARGE_ICONS: SetViewMode(FileListView::ViewMode::LargeIcons); break;
@@ -631,6 +719,17 @@ void MainWindow::OnInitMenuPopup(HMENU menu) {
     CheckMenuRadioItem(menu, IDM_VIEW_THUMBNAILS, IDM_VIEW_DETAILS, IDM_VIEW_THUMBNAILS + view, MF_BYCOMMAND);
     CheckMenuRadioItem(menu, IDM_SORT_NAME, IDM_SORT_MODIFIED, IDM_SORT_NAME + static_cast<int>(sortKey_),
                        MF_BYCOMMAND);
+    const UINT slideshowItem = slideshowSeconds_ <= 2 ? IDM_SLIDESHOW_2S
+                               : slideshowSeconds_ <= 3 ? IDM_SLIDESHOW_3S
+                               : slideshowSeconds_ <= 5 ? IDM_SLIDESHOW_5S
+                                                        : IDM_SLIDESHOW_10S;
+    CheckMenuRadioItem(menu, IDM_SLIDESHOW_2S, IDM_SLIDESHOW_10S, slideshowItem, MF_BYCOMMAND);
+    CheckMenuItem(menu, IDM_VIEW_FULLSCREEN, MF_BYCOMMAND | (fullscreen_ ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(menu, IDM_VIEW_SLIDESHOW, MF_BYCOMMAND | (slideshow_ ? MF_CHECKED : MF_UNCHECKED));
+    const UINT browserOnly = mode_ == Mode::Browser ? MF_ENABLED : MF_GRAYED;
+    EnableMenuItem(menu, IDM_NAV_PARENT_FOLDER, MF_BYCOMMAND | browserOnly);
+    EnableMenuItem(menu, IDM_VIEW_REFRESH, MF_BYCOMMAND | browserOnly);
+    EnableMenuItem(menu, IDM_EDIT_SELECT_ALL, MF_BYCOMMAND | browserOnly);
 }
 
 void MainWindow::OnDpiChanged(UINT dpi, const RECT* suggested) {
@@ -724,6 +823,10 @@ void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noe
             browser.sortKey = value;
         }
         if (SUCCEEDED(settings.ReadBool(L"Browser", L"SortAscending", true, flag))) browser.sortAscending = flag;
+        if (SUCCEEDED(settings.ReadInt(L"Viewer", L"SlideshowSeconds", defaults.slideshowSeconds, value)) &&
+            value >= 1 && value <= 3600) {
+            browser.slideshowSeconds = value;
+        }
     }
 
     RECT final{};
@@ -768,6 +871,9 @@ void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noe
         if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"SortKey", finalBrowser.sortKey);
         if (SUCCEEDED(writeResult)) {
             writeResult = settings.WriteBool(L"Browser", L"SortAscending", finalBrowser.sortAscending);
+        }
+        if (SUCCEEDED(writeResult)) {
+            writeResult = settings.WriteInt(L"Viewer", L"SlideshowSeconds", finalBrowser.slideshowSeconds);
         }
     }
     {
@@ -827,8 +933,15 @@ void MainWindow::OnClose() {
     if (closing_) return;
     closing_ = true;
     KillTimer(hwnd_, kSettingsTimer);
+    StopSlideshow();
     WINDOWPLACEMENT placement{sizeof(placement)};
-    if (!settingsState_ || !GetWindowPlacement(hwnd_, &placement)) {
+    if (fullscreen_) {
+        placement = windowedPlacement_;  // remember the windowed position, not the full screen
+    } else if (settingsState_ && !GetWindowPlacement(hwnd_, &placement)) {
+        DestroyWindow(hwnd_);
+        return;
+    }
+    if (!settingsState_) {
         DestroyWindow(hwnd_);
         return;
     }
@@ -845,6 +958,7 @@ void MainWindow::OnClose() {
             browser.viewMode = static_cast<int>(list_->GetViewMode());
             browser.sortKey = static_cast<int>(sortKey_);
             browser.sortAscending = sortAscending_;
+            browser.slideshowSeconds = slideshowSeconds_;
         }
         settingsState_->saveRequested = true;
         settingsState_->closeRequested = true;
@@ -875,6 +989,7 @@ void MainWindow::InitBrowser(const BrowserSettings& settings) {
     treeHeight96_ = settings.treeHeight;
     sortKey_ = static_cast<SortKey>(settings.sortKey);
     sortAscending_ = settings.sortAscending;
+    slideshowSeconds_ = settings.slideshowSeconds;
     model_->Sort(sortKey_, sortAscending_);  // nothing loaded yet: just sets the order
     list_->SetSortIndicator(sortKey_, sortAscending_);
     list_->SetViewMode(static_cast<FileListView::ViewMode>(settings.viewMode));
@@ -893,6 +1008,7 @@ void MainWindow::InitBrowser(const BrowserSettings& settings) {
             if (slash != std::wstring::npos) {
                 folder = NormalizeFolder(path.substr(0, slash + 1));
                 select = path.substr(slash + 1);
+                openViewerOnLoad_ = true;  // an image on the command line opens in the viewer
             }
         }
     }
@@ -977,10 +1093,29 @@ void MainWindow::OnFolderLoaded(std::uint32_t generation) {
         return;
     }
     listFolder_ = pendingFolder_;
+    const std::wstring wanted = pendingSelect_;
     pendingSelect_.clear();
     list_->Reset(saved, generation);
+    if (mode_ == Mode::Viewer) {
+        // The viewed picture moved (re-sort) or vanished (refresh).
+        const int index = ViewerIndex();
+        if (index < 0) {
+            ExitViewer();
+        } else {
+            UpdateViewerStatus();
+        }
+        return;
+    }
     SetStatusText(0, listFolder_);
     UpdateStatus();
+    if (openViewerOnLoad_) {
+        openViewerOnLoad_ = false;
+        const int focused = list_->FocusedIndex();
+        if (focused >= 0 && CompareStringOrdinal(model_->At(static_cast<std::size_t>(focused)).name.c_str(), -1,
+                                                 wanted.c_str(), -1, TRUE) == CSTR_EQUAL) {
+            EnterViewer(focused);
+        }
+    }
 }
 
 void MainWindow::OnSortCommand(SortKey key) {
@@ -1004,6 +1139,10 @@ void MainWindow::RequestStatusUpdate() {
 
 void MainWindow::UpdateStatus() {
     if (!status_) return;
+    if (mode_ == Mode::Viewer) {
+        UpdateViewerStatus();
+        return;
+    }
     const FileListView::Selection selection = list_->GetSelection();
     SetStatusText(1, Format(LoadStr(IDS_STATUS_FILES), model_->Count()));
     SetStatusText(2, Format(LoadStr(IDS_STATUS_SELECTED), selection.count));
@@ -1025,4 +1164,187 @@ void MainWindow::UpdatePreview() {
 
 void MainWindow::SetStatusText(int part, const std::wstring& text) {
     if (status_) SendMessageW(status_, SB_SETTEXTW, static_cast<WPARAM>(part), reinterpret_cast<LPARAM>(text.c_str()));
+}
+
+// ---- Viewer -----------------------------------------------------------------
+
+UINT MainWindow::ScreenSide() const {
+    // Decode for the monitor, not the window, so resizing never re-decodes.
+    MONITORINFO info = {sizeof(info)};
+    if (GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &info)) {
+        return static_cast<UINT>(std::max(info.rcMonitor.right - info.rcMonitor.left,
+                                          info.rcMonitor.bottom - info.rcMonitor.top));
+    }
+    return 1920;
+}
+
+int MainWindow::ViewerIndex() const {
+    const std::size_t count = model_->Count();
+    for (std::size_t i = 0; i < count; ++i) {
+        if (model_->At(i).id == viewerItemId_) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+void MainWindow::EnterViewer(int index) {
+    if (index < 0 || static_cast<std::size_t>(index) >= model_->Count()) return;
+    if (mode_ != Mode::Viewer) {
+        mode_ = Mode::Viewer;
+        preview_.Show(std::wstring());
+        ShowWindow(pathBar_, SW_HIDE);
+        ShowWindow(tree_.Hwnd(), SW_HIDE);
+        ShowWindow(preview_.Hwnd(), SW_HIDE);
+        ShowWindow(list_->Hwnd(), SW_HIDE);
+        Layout();  // size the viewer before its first paint
+        ShowWindow(viewer_.Hwnd(), SW_SHOW);
+        SetFocus(viewer_.Hwnd());
+    }
+    ShowViewerIndex(index, 1);
+}
+
+void MainWindow::ExitViewer() {
+    if (mode_ != Mode::Viewer) return;
+    StopSlideshow();
+    const int index = ViewerIndex();
+    if (fullscreen_) SetFullscreen(false);
+    mode_ = Mode::Browser;
+    ShowWindow(viewer_.Hwnd(), SW_HIDE);
+    viewer_.Clear();
+    viewerCache_->Retain({});
+    ShowWindow(pathBar_, SW_SHOW);
+    ShowWindow(tree_.Hwnd(), SW_SHOW);
+    ShowWindow(preview_.Hwnd(), SW_SHOW);
+    ShowWindow(list_->Hwnd(), SW_SHOW);
+    Layout();
+    // Land on the picture that was being viewed.
+    if (index >= 0) list_->SelectOnly(index);
+    SetFocus(list_->Hwnd());
+    SetWindowTextW(hwnd_, LoadStr(IDS_APP_TITLE).c_str());
+    SetStatusText(0, listFolder_);
+    UpdateStatus();
+}
+
+void MainWindow::ViewerStep(int step) {
+    if (mode_ != Mode::Viewer) return;
+    const int count = static_cast<int>(model_->Count());
+    const int index = ViewerIndex();
+    if (count == 0 || index < 0) return;
+    const int next = index + step;
+    if (next < 0 || next >= count) {
+        MessageBeep(MB_OK);  // at either end
+        return;
+    }
+    ShowViewerIndex(next, step > 0 ? 1 : -1);
+}
+
+void MainWindow::ShowViewerIndex(int index, int direction) {
+    const std::size_t count = model_->Count();
+    if (index < 0 || static_cast<std::size_t>(index) >= count) return;
+    viewerItemId_ = model_->At(static_cast<std::size_t>(index)).id;
+    viewerPath_ = model_->FullPath(static_cast<std::size_t>(index));
+    viewerDirection_ = direction;
+    const UINT side = ScreenSide();
+
+    ViewerImagePtr image = viewerCache_->Get(viewerPath_, side);
+    ThumbnailPtr placeholder;
+    if (!image) {
+        placeholder = thumbnails_->TryGetCached(list_->MakeThumbnailRequest(index));
+        viewerCache_->Request(viewerPath_, side, true);
+    }
+    viewer_.SetImage(viewerPath_, image, placeholder, viewerCache_->Failed(viewerPath_));
+
+    // Preload the neighbours, the one in the travel direction first, and
+    // let everything else go.
+    std::vector<std::wstring> keep{viewerPath_};
+    for (int offset : {direction, -direction}) {
+        const int neighbour = index + offset;
+        if (neighbour < 0 || static_cast<std::size_t>(neighbour) >= count) continue;
+        const std::wstring path = model_->FullPath(static_cast<std::size_t>(neighbour));
+        keep.push_back(path);
+        viewerCache_->Request(path, side, false);
+    }
+    viewerCache_->Retain(keep);
+
+    const auto slash = viewerPath_.find_last_of(L'\\');
+    const std::wstring name = slash == std::wstring::npos ? viewerPath_ : viewerPath_.substr(slash + 1);
+    SetWindowTextW(hwnd_, (name + L" - " + LoadStr(IDS_APP_TITLE)).c_str());
+    UpdateViewerStatus();
+}
+
+void MainWindow::RefreshViewerImage() {
+    if (mode_ != Mode::Viewer || viewerPath_.empty()) return;
+    // Prefer the sharpest decode we have for the current picture.
+    ViewerImagePtr image = viewerCache_->GetAny(viewerPath_);
+    if (image) {
+        viewer_.SetImage(viewerPath_, image, nullptr, false);
+    } else if (viewerCache_->Failed(viewerPath_)) {
+        viewer_.SetImage(viewerPath_, nullptr, nullptr, true);
+    }
+    UpdateViewerStatus();
+}
+
+void MainWindow::UpdateViewerStatus() {
+    if (mode_ != Mode::Viewer || !status_) return;
+    const int index = ViewerIndex();
+    const auto slash = viewerPath_.find_last_of(L'\\');
+    SetStatusText(0, slash == std::wstring::npos ? viewerPath_ : viewerPath_.substr(slash + 1));
+    std::wstring position = LoadStr(IDS_VIEWER_INDEX);
+    const auto first = position.find(L"%u");
+    if (first != std::wstring::npos) position.replace(first, 2, std::to_wstring(index + 1));
+    position = Format(position, model_->Count());
+    SetStatusText(1, position);
+    if (viewer_.HasImage()) {
+        SetStatusText(2, std::to_wstring(viewer_.ImageWidth()) + L" × " + std::to_wstring(viewer_.ImageHeight()));
+        const auto percent = static_cast<std::size_t>(viewer_.EffectiveScale() * 100.0 + 0.5);
+        SetStatusText(3, Format(LoadStr(IDS_VIEWER_ZOOM), percent));
+    } else {
+        SetStatusText(2, LoadStr(IDS_VIEWER_LOADING));
+        SetStatusText(3, std::wstring());
+    }
+}
+
+void MainWindow::SetFullscreen(bool fullscreen) {
+    if (fullscreen == fullscreen_) return;
+    if (fullscreen) {
+        windowedPlacement_.length = sizeof(windowedPlacement_);
+        GetWindowPlacement(hwnd_, &windowedPlacement_);
+        windowedStyle_ = GetWindowLongPtrW(hwnd_, GWL_STYLE);
+        MONITORINFO info = {sizeof(info)};
+        GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &info);
+        fullscreen_ = true;
+        SetMenu(hwnd_, nullptr);
+        ShowWindow(toolbar_, SW_HIDE);
+        ShowWindow(status_, SW_HIDE);
+        SetWindowLongPtrW(hwnd_, GWL_STYLE, (windowedStyle_ & ~WS_OVERLAPPEDWINDOW) | WS_POPUP);
+        SetWindowPos(hwnd_, HWND_TOP, info.rcMonitor.left, info.rcMonitor.top,
+                     info.rcMonitor.right - info.rcMonitor.left, info.rcMonitor.bottom - info.rcMonitor.top,
+                     SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
+    } else {
+        fullscreen_ = false;
+        SetWindowLongPtrW(hwnd_, GWL_STYLE, windowedStyle_);
+        SetMenu(hwnd_, menu_);
+        ShowWindow(toolbar_, SW_SHOW);
+        ShowWindow(status_, SW_SHOW);
+        SetWindowPlacement(hwnd_, &windowedPlacement_);
+        SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+    }
+    viewer_.SetFullscreen(fullscreen_);
+    OnSize();
+}
+
+void MainWindow::ToggleSlideshow() {
+    if (slideshow_) {
+        StopSlideshow();
+        return;
+    }
+    if (mode_ == Mode::Browser) EnterViewer(list_->FocusedIndex());
+    if (mode_ != Mode::Viewer) return;
+    slideshow_ = SetTimer(hwnd_, kSlideshowTimer, static_cast<UINT>(slideshowSeconds_) * 1000u, nullptr) != 0;
+}
+
+void MainWindow::StopSlideshow() {
+    if (!slideshow_) return;
+    slideshow_ = false;
+    KillTimer(hwnd_, kSlideshowTimer);
 }

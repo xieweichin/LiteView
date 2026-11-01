@@ -82,6 +82,13 @@ BEGIN
         MENUITEM "看圖 / 返回瀏覽(&V)\tEnter",   IDM_NAV_TOGGLE_MODE
         MENUITEM "全螢幕(&F)\tCtrl+F",           IDM_VIEW_FULLSCREEN
         MENUITEM "自動播放(&P)\tCtrl+S",         IDM_VIEW_SLIDESHOW
+        POPUP "播放間隔(&I)"
+        BEGIN
+            MENUITEM "2 秒",                     IDM_SLIDESHOW_2S
+            MENUITEM "3 秒",                     IDM_SLIDESHOW_3S
+            MENUITEM "5 秒",                     IDM_SLIDESHOW_5S
+            MENUITEM "10 秒",                    IDM_SLIDESHOW_10S
+        END
         MENUITEM SEPARATOR
         MENUITEM "上層資料夾(&U)\tBackspace",    IDM_NAV_PARENT_FOLDER
         MENUITEM "重新整理(&R)\tF5",             IDM_VIEW_REFRESH
@@ -158,6 +165,11 @@ BEGIN
     IDS_STATUS_FILES        "%u 個檔案"
     IDS_STATUS_SELECTED     "已選取 %u 個"
     IDS_ERR_OPEN_FOLDER     "無法開啟資料夾：%s"
+
+    IDS_VIEWER_ERROR        "無法開啟這張圖片"
+    IDS_VIEWER_INDEX        "%u / %u"
+    IDS_VIEWER_ZOOM         "%u%"
+    IDS_VIEWER_LOADING      "載入中…"
 
     // Toolbar tooltips (string ID = command ID)
     IDM_NAV_PARENT_FOLDER   "上層資料夾 (Backspace)"

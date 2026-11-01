@@ -48,6 +48,10 @@
 #define IDM_ZOOM_TOGGLE_FIT         40403 // /（數字鍵盤）、滑鼠中鍵
 #define IDM_VIEW_FULLSCREEN         40404 // Ctrl+F
 #define IDM_VIEW_SLIDESHOW          40405 // Ctrl+S
+#define IDM_SLIDESHOW_2S            40411 // slideshow interval
+#define IDM_SLIDESHOW_3S            40412
+#define IDM_SLIDESHOW_5S            40413
+#define IDM_SLIDESHOW_10S           40414
 
 // ---- Tools ------------------------------------------------------------------
 #define IDM_ROTATE_LEFT             40501 // Ctrl+[

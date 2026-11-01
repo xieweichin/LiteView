@@ -218,6 +218,27 @@ void FileListView::Reset(const SavedSelection& saved, std::uint32_t generation) 
 
 void FileListView::SelectAll() { ListView_SetItemState(hwnd_, -1, LVIS_SELECTED, LVIS_SELECTED); }
 
+void FileListView::SelectOnly(int index) {
+    if (index < 0 || static_cast<std::size_t>(index) >= model_.Count()) return;
+    ListView_SetItemState(hwnd_, -1, 0, LVIS_SELECTED);
+    ListView_SetItemState(hwnd_, index, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetSelectionMark(hwnd_, index);
+    ListView_EnsureVisible(hwnd_, index, FALSE);
+}
+
+ThumbnailRequest FileListView::MakeThumbnailRequest(int index) const {
+    ThumbnailRequest request;
+    if (index < 0 || static_cast<std::size_t>(index) >= model_.Count()) return request;
+    const FileItem& file = model_.At(static_cast<std::size_t>(index));
+    request.generation = generation_;
+    request.itemId = file.id;
+    request.path = model_.FullPath(static_cast<std::size_t>(index));
+    request.modified = file.modified;
+    request.fileSize = file.size;
+    request.size = static_cast<UINT>(thumbnailSize_);
+    return request;
+}
+
 int FileListView::FocusedIndex() const { return ListView_GetNextItem(hwnd_, -1, LVNI_FOCUSED); }
 
 std::vector<int> FileListView::SelectedIndices() const {
@@ -391,14 +412,7 @@ void FileListView::DrawThumbnail(HDC dc, int index) {
     RECT cell{};
     if (!ListView_GetItemRect(hwnd_, index, &cell, LVIR_ICON)) return;
     const FileItem& file = model_.At(static_cast<std::size_t>(index));
-
-    ThumbnailRequest request;
-    request.generation = generation_;
-    request.itemId = file.id;
-    request.path = model_.FullPath(static_cast<std::size_t>(index));
-    request.modified = file.modified;
-    request.fileSize = file.size;
-    request.size = static_cast<UINT>(thumbnailSize_);
+    const ThumbnailRequest request = MakeThumbnailRequest(index);
 
     bool failed = false;
     ThumbnailPtr thumbnail = thumbnails_->TryGetCached(request, &failed);
