@@ -245,8 +245,8 @@ HRESULT RenderPdfPage(const std::wstring& file, UINT page, UINT maxSide, ComPtr<
         // BMP is cheaper to write and read back than the default PNG, but not
         // every Windows build accepts it: fall back to PNG on failure.
         ComPtr<IInspectable> output;
-        for (int attempt = 0; attempt < 2; ++attempt) {
-            options->put_BitmapEncoderId(attempt == 0 ? GUID_ContainerFormatBmp : GUID_ContainerFormatPng);
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            if (attempt < 2) options->put_BitmapEncoderId(attempt == 0 ? GUID_ContainerFormatBmp : GUID_ContainerFormatPng);
             ComPtr<IInspectable> memory;
             hr = Activate(L"Windows.Storage.Streams.InMemoryRandomAccessStream", memory);
             if (FAILED(hr)) { g_lastStep = 11; return hr; }
@@ -254,12 +254,14 @@ HRESULT RenderPdfPage(const std::wstring& file, UINT page, UINT maxSide, ComPtr<
             hr = memory->QueryInterface(kIidRandomAccessStream, reinterpret_cast<void**>(output.GetAddressOf()));
             if (FAILED(hr)) { g_lastStep = 12; return hr; }
             ComPtr<IAsyncActionLite> render;
-            hr = pdfPage->RenderWithOptionsToStreamAsync(output.Get(), options.Get(), render.GetAddressOf());
-            if (FAILED(hr)) { g_lastStep = 13; continue; }
+            // Last resort: default options (PNG at the page's own size).
+            hr = attempt < 2 ? pdfPage->RenderWithOptionsToStreamAsync(output.Get(), options.Get(), render.GetAddressOf())
+                             : pdfPage->RenderToStreamAsync(output.Get(), render.GetAddressOf());
+            if (FAILED(hr)) { g_lastStep = 13 + 100 * attempt; continue; }
             hr = Wait(render.Get());
-            if (FAILED(hr)) { g_lastStep = 14; continue; }
+            if (FAILED(hr)) { g_lastStep = 14 + 100 * attempt; continue; }
             hr = render->GetResults();
-            if (FAILED(hr)) { g_lastStep = 15; continue; }
+            if (FAILED(hr)) { g_lastStep = 15 + 100 * attempt; continue; }
             break;
         }
         if (FAILED(hr)) return hr;
