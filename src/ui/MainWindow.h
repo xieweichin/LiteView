@@ -54,8 +54,8 @@ private:
     HACCEL accelViewer_ = nullptr;
     Mode mode_ = Mode::Browser;
     UINT dpi_ = USER_DEFAULT_SCREEN_DPI;
-    bool placementTouched_ = false;
     bool closing_ = false;
+    int showCommand_ = SW_SHOWNORMAL;
     std::shared_ptr<SettingsState> settingsState_;
     std::thread settingsThread_;
 };

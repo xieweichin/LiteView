@@ -61,6 +61,7 @@ MainWindow::~MainWindow() {
 
 HRESULT MainWindow::Create(HINSTANCE instance, int showCommand) {
     instance_ = instance;
+    showCommand_ = showCommand;
 
     WNDCLASSEXW wc = {sizeof(wc)};
     wc.style = CS_DBLCLKS;
@@ -95,8 +96,9 @@ HRESULT MainWindow::Create(HINSTANCE instance, int showCommand) {
         return settingsResult;
     }
 
-    ShowWindow(hwnd_, showCommand);
-    UpdateWindow(hwnd_);
+    // Keep the window hidden until the background settings read completes.
+    // The message loop can run while the disk is slow, without displaying the
+    // default placement first and then jumping to the saved placement.
     return S_OK;
 }
 
@@ -143,13 +145,6 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_DPICHANGED:
         OnDpiChanged(HIWORD(wParam), reinterpret_cast<const RECT*>(lParam));
         return 0;
-    case WM_ENTERSIZEMOVE:
-        placementTouched_ = true;
-        break;
-    case WM_SYSCOMMAND:
-        if ((wParam & 0xFFF0) == SC_MAXIMIZE || (wParam & 0xFFF0) == SC_RESTORE ||
-            (wParam & 0xFFF0) == SC_MINIMIZE) placementTouched_ = true;
-        break;
     case WM_CLOSE:
         OnClose();
         return 0;
@@ -375,19 +370,25 @@ void MainWindow::OnSettingsReady(WPARAM token) {
         canRestore = settingsState_->canRestore;
         hr = settingsState_->readResult;
     }
+    int command = showCommand_;
+    if (canRestore && MonitorFromRect(&rect, MONITOR_DEFAULTTONULL)) {
+        WINDOWPLACEMENT placement{sizeof(placement)};
+        if (GetWindowPlacement(hwnd_, &placement)) {
+            placement.rcNormalPosition = rect;
+            placement.showCmd = SW_HIDE;
+            if (SetWindowPlacement(hwnd_, &placement) && maximized && command != SW_HIDE &&
+                command != SW_SHOWMINIMIZED && command != SW_MINIMIZE &&
+                command != SW_SHOWMINNOACTIVE && command != SW_FORCEMINIMIZE) {
+                command = SW_SHOWMAXIMIZED;
+            }
+        }
+    }
+    ShowWindow(hwnd_, command);
+    UpdateWindow(hwnd_);
     if (FAILED(hr)) {
         MessageBoxW(hwnd_, LoadStr(IDS_ERR_SETTINGS_READ).c_str(), LoadStr(IDS_APP_TITLE).c_str(),
                     MB_OK | MB_ICONWARNING);
-        return;
     }
-    if (!canRestore || placementTouched_ || !MonitorFromRect(&rect, MONITOR_DEFAULTTONULL)) return;
-    WINDOWPLACEMENT placement{sizeof(placement)};
-    if (!GetWindowPlacement(hwnd_, &placement)) return;
-    placement.rcNormalPosition = rect;
-    if (placement.showCmd != SW_SHOWMINIMIZED && placement.showCmd != SW_MINIMIZE) {
-        placement.showCmd = maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
-    }
-    SetWindowPlacement(hwnd_, &placement);
 }
 
 void MainWindow::OnClose() {

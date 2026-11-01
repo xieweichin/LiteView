@@ -21,8 +21,11 @@ struct FileItem {
 enum class SortKey { Name, Size, Type, Modified };
 
 // Open and Sort perform filesystem work and sorting on worker threads. The
-// callback is also called on a worker and must return promptly; a UI should
-// post a notification and call Commit on its own thread. Count, At, FullPath,
+// callback is also called on a worker under an internal lock and must return
+// promptly. A UI must post a notification (not synchronously send a message)
+// and call Commit on its own thread. Sort completes asynchronously and invokes
+// the same callback with the same generation; commit again after that callback.
+// Count, At, FullPath,
 // and Commit must be used from that same consumer thread. An At reference is
 // valid only until the next successful Commit or destruction of this model.
 class FolderModel {

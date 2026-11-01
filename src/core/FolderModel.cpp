@@ -64,7 +64,7 @@ HRESULT DecoderExtensions(std::vector<std::wstring>& extensions) {
         std::wstring values(buffer.data());
         std::size_t start = 0;
         while (start <= values.size()) {
-            const std::size_t comma = values.find(L',', start);
+            const std::size_t comma = values.find_first_of(L",;", start);
             std::wstring extension = values.substr(start, comma == std::wstring::npos ? comma : comma - start);
             const auto first = extension.find_first_not_of(L" \t\r\n");
             const auto last = extension.find_last_not_of(L" \t\r\n");
@@ -138,9 +138,7 @@ FolderModel::FolderModel(std::shared_ptr<ThreadPool> pool) noexcept {
         if (pool) {
             pool_ = std::move(pool);
         } else {
-            const unsigned hardware = std::thread::hardware_concurrency();
-            const unsigned workers = std::max(1u, std::min(4u, hardware > 1 ? hardware - 1 : 1u));
-            pool_ = std::make_shared<ThreadPool>(workers);
+            pool_ = std::make_shared<ThreadPool>(ThreadPool::DefaultThreadCount());
         }
     } catch (...) {
         state_.reset();

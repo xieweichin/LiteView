@@ -8,7 +8,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <queue>
+#include <set>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -29,6 +29,7 @@ public:
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
 
+    static std::size_t DefaultThreadCount() noexcept;
     HRESULT Submit(Task task, Priority priority = Priority::Normal,
                    TaskId* taskId = nullptr) noexcept;
     bool Cancel(TaskId taskId) noexcept;
@@ -41,7 +42,6 @@ private:
         TaskId id;
         Priority priority;
         Task task;
-        bool cancelled = false;
     };
     struct EarlierJob {
         bool operator()(const std::shared_ptr<Job>& left,
@@ -53,7 +53,7 @@ private:
     mutable std::mutex mutex_;
     std::mutex shutdownMutex_;
     std::condition_variable ready_;
-    std::priority_queue<std::shared_ptr<Job>, std::vector<std::shared_ptr<Job>>, EarlierJob> queue_;
+    std::set<std::shared_ptr<Job>, EarlierJob> queue_;
     std::unordered_map<TaskId, std::shared_ptr<Job>> pending_;
     std::vector<std::thread> workers_;
     TaskId nextId_ = 1;

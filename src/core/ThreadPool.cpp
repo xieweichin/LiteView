@@ -1,5 +1,6 @@
 #include "core/ThreadPool.h"
 
+#include <algorithm>
 #include <new>
 #include <utility>
 
@@ -10,9 +11,14 @@ thread_local const ThreadPool* currentWorkerPool = nullptr;
 bool ThreadPool::EarlierJob::operator()(const std::shared_ptr<Job>& left,
                                         const std::shared_ptr<Job>& right) const noexcept {
     if (left->priority != right->priority) {
-        return static_cast<int>(left->priority) < static_cast<int>(right->priority);
+        return static_cast<int>(left->priority) > static_cast<int>(right->priority);
     }
-    return left->id > right->id;
+    return left->id < right->id;
+}
+
+std::size_t ThreadPool::DefaultThreadCount() noexcept {
+    const unsigned hardware = std::thread::hardware_concurrency();
+    return std::max(1u, std::min(4u, hardware > 1 ? hardware - 1 : 1u));
 }
 
 ThreadPool::ThreadPool(std::size_t threadCount) noexcept {
@@ -49,10 +55,10 @@ HRESULT ThreadPool::Submit(Task task, Priority priority, TaskId* taskId) noexcep
         if (stopping_) return E_ABORT;
         const TaskId id = nextId_++;
         if (id == 0) return E_FAIL;
-        auto job = std::make_shared<Job>(Job{id, priority, std::move(task), false});
+        auto job = std::make_shared<Job>(Job{id, priority, std::move(task)});
         pending_.emplace(id, job);
         try {
-            queue_.push(job);
+            queue_.insert(job);
         } catch (...) {
             pending_.erase(id);
             throw;
@@ -68,19 +74,29 @@ HRESULT ThreadPool::Submit(Task task, Priority priority, TaskId* taskId) noexcep
 }
 
 bool ThreadPool::Cancel(TaskId taskId) noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto found = pending_.find(taskId);
-    if (found == pending_.end()) return false;
-    found->second->cancelled = true;
-    pending_.erase(found);
+    std::shared_ptr<Job> removed;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto found = pending_.find(taskId);
+        if (found == pending_.end()) return false;
+        removed = found->second;
+        queue_.erase(removed);
+        pending_.erase(found);
+    }
+    // Destroy user captures outside the lock: their destructors may call us.
     return true;
 }
 
 std::size_t ThreadPool::CancelPending() noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const std::size_t count = pending_.size();
-    for (const auto& entry : pending_) entry.second->cancelled = true;
-    pending_.clear();
+    decltype(queue_) removedQueue;
+    decltype(pending_) removedPending;
+    std::size_t count;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        count = pending_.size();
+        removedQueue.swap(queue_);
+        removedPending.swap(pending_);
+    }
     return count;
 }
 
@@ -88,20 +104,27 @@ HRESULT ThreadPool::Shutdown() noexcept {
     // Check before taking shutdownMutex_: an external shutdown may already be
     // waiting for this task to finish.
     if (currentWorkerPool == this) return E_UNEXPECTED;
-    std::lock_guard<std::mutex> shutdownLock(shutdownMutex_);
+    decltype(queue_) removedQueue;
+    decltype(pending_) removedPending;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stopping_ = true;
-        for (const auto& entry : pending_) entry.second->cancelled = true;
-        pending_.clear();
+        removedQueue.swap(queue_);
+        removedPending.swap(pending_);
     }
     ready_.notify_all();
-    try {
-        for (auto& worker : workers_) {
-            if (worker.joinable()) worker.join();
+    // Release queued captures promptly, without holding either pool lock.
+    removedQueue.clear();
+    removedPending.clear();
+    {
+        std::lock_guard<std::mutex> shutdownLock(shutdownMutex_);
+        try {
+            for (auto& worker : workers_) {
+                if (worker.joinable()) worker.join();
+            }
+        } catch (...) {
+            return E_FAIL;
         }
-    } catch (...) {
-        return E_FAIL;
     }
     return S_OK;
 }
@@ -122,9 +145,8 @@ void ThreadPool::Worker() noexcept {
                 currentWorkerPool = nullptr;
                 return;
             }
-            job = queue_.top();
-            queue_.pop();
-            if (job->cancelled) continue;
+            job = *queue_.begin();
+            queue_.erase(queue_.begin());
             pending_.erase(job->id);
         }
         // A task must not be able to terminate the worker process.

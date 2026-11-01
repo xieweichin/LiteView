@@ -96,3 +96,48 @@ TEST_CASE("a worker cannot shut down its own pool") {
     if (status == std::future_status::ready) CHECK(resultFuture.get() == E_UNEXPECTED);
     CHECK(pool.Shutdown() == S_OK);
 }
+
+TEST_CASE("cancelling queued work releases captures immediately outside pool locks") {
+    ThreadPool pool(1);
+    Gate gate;
+    std::promise<void> started;
+    auto startedFuture = started.get_future();
+    CHECK(pool.Submit([&] { started.set_value(); gate.ready.wait(); }) == S_OK);
+    const auto startStatus = startedFuture.wait_for(3s);
+    CHECK(startStatus == std::future_status::ready);
+    if (startStatus != std::future_status::ready) return;
+
+    auto capture = std::shared_ptr<int>(new int(1), [&pool](int* value) {
+        (void)pool.PendingCount();  // This would deadlock if destroyed under mutex_.
+        delete value;
+    });
+    std::weak_ptr<int> weak = capture;
+    ThreadPool::TaskId id = 0;
+    CHECK(pool.Submit([capture] {}, ThreadPool::Priority::Normal, &id) == S_OK);
+    capture.reset();
+    CHECK(pool.Cancel(id));
+    CHECK(weak.expired());
+
+    auto second = std::make_shared<int>(2);
+    std::weak_ptr<int> secondWeak = second;
+    CHECK(pool.Submit([second] {}) == S_OK);
+    second.reset();
+    CHECK(pool.CancelPending() == 1);
+    CHECK(secondWeak.expired());
+
+    auto third = std::make_shared<int>(3);
+    std::weak_ptr<int> thirdWeak = third;
+    CHECK(pool.Submit([third] {}) == S_OK);
+    third.reset();
+    auto closing = std::async(std::launch::async, [&] { return pool.Shutdown(); });
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (!thirdWeak.expired() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    CHECK(thirdWeak.expired());
+    gate.Release();
+    CHECK(closing.wait_for(3s) == std::future_status::ready);
+    CHECK(closing.get() == S_OK);
+    CHECK(ThreadPool::DefaultThreadCount() >= 1);
+    CHECK(ThreadPool::DefaultThreadCount() <= 4);
+}
