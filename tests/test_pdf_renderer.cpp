@@ -4,6 +4,7 @@
 #include "core/PdfRenderer.h"
 
 #include <array>
+#include <ios>
 #include <string>
 #include <vector>
 
