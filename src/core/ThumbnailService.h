@@ -42,6 +42,11 @@ struct ThumbnailRequest {
 // WIC results are written to the disk cache as 85% JPEG files named by a
 // hash of path, modified time, file size and thumbnail size; the cache is
 // pruned to its byte limit by deleting the least recently used files.
+// The Windows shell's own thumbnail of a file (Office, video...), long side
+// <= size; fails when the file type has no thumbnail provider. COM must be
+// initialized on the calling thread.
+HRESULT ShellThumbnailImage(const std::wstring& path, UINT size, ThumbnailPtr& out) noexcept;
+
 class ThumbnailService {
 public:
     // Called on a worker thread; post a message and return.

@@ -132,6 +132,18 @@ CodecPack FirstCodecPack(std::uint32_t mask) noexcept {
     return CodecPack::Count;
 }
 
+bool IsDocumentExtension(const wchar_t* extension) noexcept {
+    static const wchar_t* const kDocuments[] = {
+        L".doc", L".docx", L".docm", L".dot", L".dotx", L".rtf", L".xls", L".xlsx", L".xlsm", L".xlsb", L".xlt",
+        L".xltx", L".ppt", L".pptx", L".pptm", L".pps", L".ppsx", L".pot", L".potx", L".odt", L".ods", L".odp",
+        L".vsd", L".vsdx", L".pub", L".msg", L".eml", L".xps", L".oxps"};
+    if (!extension || !*extension) return false;
+    for (const wchar_t* known : kDocuments) {
+        if (_wcsicmp(extension, known) == 0) return true;
+    }
+    return false;
+}
+
 const wchar_t* CodecPackName(CodecPack pack) noexcept {
     const PackInfo* info = Info(pack);
     return info ? info->name : L"";

@@ -155,6 +155,8 @@ TEST_CASE("files that need a missing codec extension are counted, not listed") {
     fixture.AddFile(fixture.first, L"b.heic", 1, 132537600000000000ULL);
     fixture.AddFile(fixture.first, L"c.CR3", 1, 132537600000000000ULL);
     fixture.AddFile(fixture.first, L"d.txt", 1, 132537600000000000ULL);
+    fixture.AddFile(fixture.first, L"e.docx", 1, 132537600000000000ULL);
+    fixture.AddFile(fixture.first, L"f.pdf", 1, 132537600000000000ULL);
 
     // Expectations depend on the codecs installed on the test machine.
     const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -170,11 +172,13 @@ TEST_CASE("files that need a missing codec extension are counted, not listed") {
     REQUIRE(generation != 0);
     REQUIRE(notifications.Wait(1));
     REQUIRE(model.Commit(generation) == S_OK);
-    REQUIRE(model.Count() == 2u + (heic ? 1u : 0u) + (cr3 ? 1u : 0u));
-    // Text files are listed as text; pictures as images.
+    REQUIRE(model.Count() == 4u + (heic ? 1u : 0u) + (cr3 ? 1u : 0u));
+    // Each file is listed with the kind that decides how it is shown.
     for (std::size_t i = 0; i < model.Count(); ++i) {
         const FileItem& item = model.At(i);
         CHECK((item.kind == FileKind::Text) == (item.name == L"d.txt"));
+        CHECK((item.kind == FileKind::Document) == (item.name == L"e.docx"));
+        CHECK((item.kind == FileKind::Pdf) == (item.name == L"f.pdf"));
     }
     CodecGap gap = model.MissingCodecs();
     CHECK(gap.files == (heic ? 0u : 1u) + (cr3 ? 0u : 1u));

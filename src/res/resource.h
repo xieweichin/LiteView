@@ -103,3 +103,9 @@
 
 // PDF
 #define IDS_PDF_PAGE                1800
+
+// Documents (preview handlers)
+#define IDS_DOC_PREVIEW             1900
+#define IDS_DOC_ERROR               1901
+#define IDS_DOC_NO_HANDLER          1902
+#define IDS_DOC_NO_HANDLER_SHORT    1903

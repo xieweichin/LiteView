@@ -412,7 +412,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_CONTEXTMENU:
         if (reinterpret_cast<HWND>(wParam) == list_->Hwnd() || reinterpret_cast<HWND>(wParam) == viewer_.Hwnd() ||
-            reinterpret_cast<HWND>(wParam) == textView_.Hwnd()) {
+            reinterpret_cast<HWND>(wParam) == textView_.Hwnd() || reinterpret_cast<HWND>(wParam) == documentView_.Hwnd()) {
             ShowContextMenu(POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
             return 0;
         }
@@ -435,7 +435,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_SETFOCUS:
         if (mode_ == Mode::Viewer && viewer_.Hwnd()) {
-            SetFocus(viewerIsText_ ? textView_.Hwnd() : viewer_.Hwnd());
+            SetFocus(ViewerPageHwnd(viewerPageKind_));
         } else if (list_ && list_->Hwnd()) {
             SetFocus(list_->Hwnd());
         }
@@ -524,6 +524,14 @@ bool MainWindow::OnCreate() {
     callbacks.viewChanged = [this] { UpdateViewerStatus(); };
     if (FAILED(viewer_.Create(hwnd_, instance_, std::move(callbacks)))) return false;
     if (FAILED(textView_.Create(hwnd_, instance_, [this] { UpdateViewerStatus(); }))) return false;
+    {
+        DocumentView::Callbacks documentCallbacks;
+        documentCallbacks.translateAccelerator = [this](MSG* msg) {
+            return mode_ == Mode::Viewer && accelViewer_ && ::TranslateAcceleratorW(hwnd_, accelViewer_, msg) != 0;
+        };
+        documentCallbacks.changed = [this] { UpdateViewerStatus(); };
+        if (FAILED(documentView_.Create(hwnd_, instance_, accelViewer_, std::move(documentCallbacks)))) return false;
+    }
     CreateMenus();
     SetBarItems();
     list_->SetRenameCallback([this](int index, const std::wstring& name) { return RenameItem(index, name); });
@@ -692,6 +700,7 @@ void MainWindow::OnThemeChanged() {
     navBar_.OnThemeChanged();
     commandBar_.OnThemeChanged();
     textView_.OnThemeChanged();
+    documentView_.OnThemeChanged();
     RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
@@ -826,6 +835,7 @@ void MainWindow::Layout() {
         content_ = RECT{0, top, rc.right, bottom};
         SetWindowPos(viewer_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowPos(textView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(documentView_.Hwnd(), nullptr, 0, top, rc.right, bottom - top, SWP_NOZORDER | SWP_NOACTIVATE);
         InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
@@ -1008,17 +1018,20 @@ void MainWindow::OnCommand(UINT id) {
         break;
     case IDM_ZOOM_IN:
         if (mode_ == Mode::Viewer) {
-            if (viewerIsText_) textView_.ZoomIn(); else viewer_.ZoomIn();
+            if (viewerPageKind_ == ViewerPage::Text) textView_.ZoomIn();
+            else if (viewerPageKind_ == ViewerPage::Picture) viewer_.ZoomIn();
         }
         break;
     case IDM_ZOOM_OUT:
         if (mode_ == Mode::Viewer) {
-            if (viewerIsText_) textView_.ZoomOut(); else viewer_.ZoomOut();
+            if (viewerPageKind_ == ViewerPage::Text) textView_.ZoomOut();
+            else if (viewerPageKind_ == ViewerPage::Picture) viewer_.ZoomOut();
         }
         break;
     case IDM_ZOOM_TOGGLE_FIT:
         if (mode_ == Mode::Viewer) {
-            if (viewerIsText_) textView_.ResetZoom(); else viewer_.ToggleFit();
+            if (viewerPageKind_ == ViewerPage::Text) textView_.ResetZoom();
+            else if (viewerPageKind_ == ViewerPage::Picture) viewer_.ToggleFit();
         }
         break;
     case IDM_VIEW_FULLSCREEN:
@@ -1630,7 +1643,8 @@ void MainWindow::EnterViewer(int index) {
         ShowWindow(preview_.Hwnd(), SW_HIDE);
         ShowWindow(list_->Hwnd(), SW_HIDE);
         Layout();  // size the viewer before its first paint
-        viewerIsText_ = model_->At(static_cast<std::size_t>(index)).kind == FileKind::Text;
+        viewerPageKind_ = PageFor(model_->At(static_cast<std::size_t>(index)).kind);
+        viewerIsText_ = viewerPageKind_ == ViewerPage::Text;
         ShowViewerPage();
     }
     ShowViewerIndex(index, 1);
@@ -1644,8 +1658,11 @@ void MainWindow::ExitViewer() {
     mode_ = Mode::Browser;
     ShowWindow(viewer_.Hwnd(), SW_HIDE);
     ShowWindow(textView_.Hwnd(), SW_HIDE);
+    ShowWindow(documentView_.Hwnd(), SW_HIDE);
     viewer_.Clear();
     textView_.Clear();
+    documentView_.Clear();
+    viewerPageKind_ = ViewerPage::Picture;
     viewerIsText_ = false;
     viewerCache_->Retain({});
     SetBarItems();
@@ -1686,16 +1703,22 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     viewerDirection_ = direction;
     const UINT side = ScreenSide();
 
-    const bool text = model_->At(static_cast<std::size_t>(index)).kind == FileKind::Text;
-    if (text != viewerIsText_) {
-        viewerIsText_ = text;
+    const FileKind kind = model_->At(static_cast<std::size_t>(index)).kind;
+    const ViewerPage pageKind = PageFor(kind);
+    if (pageKind != viewerPageKind_) {
+        viewerPageKind_ = pageKind;
+        viewerIsText_ = pageKind == ViewerPage::Text;
         ShowViewerPage();
     }
-    if (text) {
+    if (pageKind != ViewerPage::Text) textView_.Clear();
+    if (pageKind != ViewerPage::Document) documentView_.Clear();
+    if (pageKind == ViewerPage::Text) {
         viewer_.Clear();
         textView_.Show(viewerPath_);
+    } else if (pageKind == ViewerPage::Document) {
+        viewer_.Clear();
+        documentView_.Show(viewerPath_);
     } else {
-        textView_.Clear();
         ViewerImagePtr image = viewerCache_->Get(viewerKey_, side);
         ThumbnailPtr placeholder;
         if (!image) {
@@ -1711,7 +1734,7 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
     for (int offset : {direction, -direction}) {
         const int neighbour = index + offset;
         if (neighbour < 0 || static_cast<std::size_t>(neighbour) >= count) continue;
-        if (model_->At(static_cast<std::size_t>(neighbour)).kind == FileKind::Text) continue;
+        if (PageFor(model_->At(static_cast<std::size_t>(neighbour)).kind) != ViewerPage::Picture) continue;
         const std::wstring path = model_->FullPath(static_cast<std::size_t>(neighbour));
         keep.push_back(path);
         viewerCache_->Request(path, side, false);
@@ -1726,14 +1749,32 @@ void MainWindow::ShowViewerIndex(int index, int direction) {
 
 void MainWindow::ShowViewerPage() {
     // Called in viewer mode when the kind of the current file changes.
-    HWND page = viewerIsText_ ? textView_.Hwnd() : viewer_.Hwnd();
+    HWND page = ViewerPageHwnd(viewerPageKind_);
     ShowWindow(page, SW_SHOW);
-    ShowWindow(viewerIsText_ ? viewer_.Hwnd() : textView_.Hwnd(), SW_HIDE);
+    for (ViewerPage other : {ViewerPage::Picture, ViewerPage::Text, ViewerPage::Document}) {
+        if (other != viewerPageKind_) ShowWindow(ViewerPageHwnd(other), SW_HIDE);
+    }
     SetFocus(page);
 }
 
+MainWindow::ViewerPage MainWindow::PageFor(FileKind kind) {
+    switch (kind) {
+    case FileKind::Text: return ViewerPage::Text;
+    case FileKind::Document: return ViewerPage::Document;
+    default: return ViewerPage::Picture;  // pictures and PDF pages
+    }
+}
+
+HWND MainWindow::ViewerPageHwnd(ViewerPage page) const {
+    switch (page) {
+    case ViewerPage::Text: return textView_.Hwnd();
+    case ViewerPage::Document: return documentView_.Hwnd();
+    default: return viewer_.Hwnd();
+    }
+}
+
 void MainWindow::StepPdfPage(int step) {
-    if (mode_ != Mode::Viewer || viewerIsText_ || !IsPdfPath(viewerPath_)) return;
+    if (mode_ != Mode::Viewer || viewerPageKind_ != ViewerPage::Picture || !IsPdfPath(viewerPath_)) return;
     // The page count is known once any page of this document has decoded.
     const ViewerImagePtr current = viewerCache_->GetAny(viewerKey_);
     if (!current || current->pageCount == 0) return;
@@ -1759,7 +1800,7 @@ void MainWindow::StepPdfPage(int step) {
 }
 
 void MainWindow::RefreshViewerImage() {
-    if (mode_ != Mode::Viewer || viewerPath_.empty() || viewerIsText_) return;
+    if (mode_ != Mode::Viewer || viewerPath_.empty() || viewerPageKind_ != ViewerPage::Picture) return;
     // Prefer the sharpest decode we have for the current picture.
     ViewerImagePtr image = viewerCache_->GetAny(viewerKey_);
     if (image) {
@@ -1780,7 +1821,15 @@ void MainWindow::UpdateViewerStatus() {
     if (first != std::wstring::npos) position.replace(first, 2, std::to_wstring(index + 1));
     position = Format(position, model_->Count());
     SetStatusText(1, position);
-    if (viewerIsText_) {
+    if (viewerPageKind_ == ViewerPage::Document) {
+        switch (documentView_.GetState()) {
+        case DocumentView::State::Loading: SetStatusText(2, LoadStr(IDS_VIEWER_LOADING)); break;
+        case DocumentView::State::NoHandler: SetStatusText(2, LoadStr(IDS_DOC_NO_HANDLER_SHORT)); break;
+        case DocumentView::State::Failed: SetStatusText(2, LoadStr(IDS_DOC_ERROR)); break;
+        default: SetStatusText(2, LoadStr(IDS_DOC_PREVIEW)); break;
+        }
+        SetStatusText(3, std::wstring());
+    } else if (viewerIsText_) {
         if (textView_.Loading()) {
             SetStatusText(2, LoadStr(IDS_VIEWER_LOADING));
         } else if (textView_.Failed()) {
@@ -1834,6 +1883,7 @@ void MainWindow::SetFullscreen(bool fullscreen) {
     }
     viewer_.SetFullscreen(fullscreen_);
     textView_.SetFullscreen(fullscreen_);
+    documentView_.SetFullscreen(fullscreen_);
     OnSize();
 }
 
@@ -2069,7 +2119,7 @@ void MainWindow::RotateSelection(bool clockwise) {
     std::vector<int> indices;
     if (mode_ == Mode::Viewer) {
         const int index = ViewerIndex();
-        if (index < 0 || viewerIsText_) return;
+        if (index < 0 || viewerPageKind_ != ViewerPage::Picture || IsPdfPath(viewerPath_)) return;
         indices.push_back(index);
         viewer_.RotatePending(clockwise);  // turn on screen right away
     } else {

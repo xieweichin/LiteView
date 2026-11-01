@@ -58,3 +58,15 @@ TEST_CASE("installed WIC decoders include the built-in formats") {
     CHECK_FALSE(HasExtension(extensions, L""));
     if (SUCCEEDED(init)) CoUninitialize();
 }
+
+TEST_CASE("Office documents are recognised by extension") {
+    CHECK(IsDocumentExtension(L".docx"));
+    CHECK(IsDocumentExtension(L".XLSX"));
+    CHECK(IsDocumentExtension(L".pptx"));
+    CHECK(IsDocumentExtension(L".odt"));
+    CHECK(IsDocumentExtension(L".rtf"));
+    CHECK_FALSE(IsDocumentExtension(L".pdf"));  // drawn by Windows.Data.Pdf instead
+    CHECK_FALSE(IsDocumentExtension(L".txt"));
+    CHECK_FALSE(IsDocumentExtension(L""));
+    CHECK_FALSE(IsDocumentExtension(nullptr));
+}

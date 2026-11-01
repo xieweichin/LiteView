@@ -64,6 +64,8 @@ add_executable(LiteView WIN32
     src/ui/FolderTree.h
     src/ui/PreviewPane.cpp
     src/ui/TextView.cpp
+    src/ui/DocumentView.cpp
+    src/ui/DocumentView.h
     src/ui/TextView.h
     src/ui/PreviewPane.h
     src/ui/ViewerView.cpp
