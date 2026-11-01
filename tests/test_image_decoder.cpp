@@ -185,3 +185,87 @@ TEST_CASE("independent COM-initialized threads can decode concurrently") {
     }
     for (auto& result : work) CHECK(result.get());
 }
+
+namespace {
+
+// Writes a width x height four-colour JPEG with the given EXIF orientation.
+HRESULT WriteLargeJpeg(const std::wstring& path, UINT width, UINT height, USHORT orientation) {
+    using Microsoft::WRL::ComPtr;
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                  IID_PPV_ARGS(factory.GetAddressOf()));
+    if (FAILED(hr)) return hr;
+    std::vector<BYTE> pixels(static_cast<size_t>(width) * height * 3);
+    for (UINT y = 0; y < height; ++y) {
+        for (UINT x = 0; x < width; ++x) {
+            BYTE* p = &pixels[(static_cast<size_t>(y) * width + x) * 3];  // BGR
+            const bool right = x >= width / 2, bottom = y >= height / 2;
+            const int rgb[4][3] = {{240, 20, 20}, {20, 220, 20}, {20, 20, 240}, {240, 220, 20}};
+            const int* c = rgb[(bottom ? 2 : 0) + (right ? 1 : 0)];
+            p[0] = static_cast<BYTE>(c[2]);
+            p[1] = static_cast<BYTE>(c[1]);
+            p[2] = static_cast<BYTE>(c[0]);
+        }
+    }
+    ComPtr<IWICStream> stream;
+    hr = factory->CreateStream(stream.GetAddressOf());
+    if (SUCCEEDED(hr)) hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+    ComPtr<IWICBitmapEncoder> encoder;
+    if (SUCCEEDED(hr)) hr = factory->CreateEncoder(GUID_ContainerFormatJpeg, nullptr, encoder.GetAddressOf());
+    if (SUCCEEDED(hr)) hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    ComPtr<IWICBitmapFrameEncode> frame;
+    if (SUCCEEDED(hr)) hr = encoder->CreateNewFrame(frame.GetAddressOf(), nullptr);
+    if (SUCCEEDED(hr)) hr = frame->Initialize(nullptr);
+    if (SUCCEEDED(hr)) hr = frame->SetSize(width, height);
+    WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
+    if (SUCCEEDED(hr)) hr = frame->SetPixelFormat(&format);
+    if (SUCCEEDED(hr)) {
+        ComPtr<IWICMetadataQueryWriter> writer;
+        hr = frame->GetMetadataQueryWriter(writer.GetAddressOf());
+        if (SUCCEEDED(hr)) {
+            PROPVARIANT value{};
+            value.vt = VT_UI2;
+            value.uiVal = orientation;
+            hr = writer->SetMetadataByName(L"/app1/ifd/{ushort=274}", &value);
+        }
+    }
+    if (SUCCEEDED(hr)) {
+        hr = frame->WritePixels(height, width * 3, static_cast<UINT>(pixels.size()), pixels.data());
+    }
+    if (SUCCEEDED(hr)) hr = frame->Commit();
+    if (SUCCEEDED(hr)) hr = encoder->Commit();
+    return hr;
+}
+
+}  // namespace
+
+// Regression: IWICBitmapFlipRotator on an unbuffered decoder is quadratic, so a
+// 12 MP portrait phone photo would take minutes. The bound is generous on purpose.
+TEST_CASE("rotating a 12 MP JPEG stays fast") {
+    ComApartment apartment;
+    REQUIRE(SUCCEEDED(apartment.result));
+    wchar_t temp[MAX_PATH]{};
+    REQUIRE(GetTempPathW(MAX_PATH, temp) > 0);
+    const std::wstring path = std::wstring(temp) + L"LiteView-large-" +
+                              std::to_wstring(GetCurrentProcessId()) + L".jpg";
+    const HRESULT written = WriteLargeJpeg(path, 4000, 3000, 6);
+    if (FAILED(written)) {
+        DeleteFileW(path.c_str());
+        MESSAGE("JPEG encoder with EXIF writer unavailable; skipped");
+        return;
+    }
+    ImageDecoder decoder;
+    for (UINT maxSide : {0u, 1920u, 256u}) {
+        CAPTURE(maxSide);
+        DecodedImage decoded;
+        const ULONGLONG start = GetTickCount64();
+        REQUIRE(decoder.Decode(path, maxSide, decoded) == S_OK);
+        const ULONGLONG ms = GetTickCount64() - start;
+        MESSAGE("4000x3000 orientation 6, maxSide " << maxSide << ": " << ms << " ms");
+        CHECK(decoded.originalWidth == 3000);
+        CHECK(decoded.originalHeight == 4000);
+        CHECK(decoded.height >= decoded.width);
+        CHECK(ms < 3000);
+    }
+    DeleteFileW(path.c_str());
+}

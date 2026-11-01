@@ -91,8 +91,8 @@ HRESULT ImageDecoder::Decode(const std::wstring& path, UINT maxSide, DecodedImag
             if (FAILED(hr)) return hr;
             source = scaler;
         }
-        hr = Orient(factory.Get(), orientation, source);
-        if (FAILED(hr)) return hr;
+        // Convert and buffer before orienting: IWICBitmapFlipRotator pulls
+        // pixels one at a time, which is quadratic on an unbuffered decoder.
         ComPtr<IWICFormatConverter> converter;
         hr = factory->CreateFormatConverter(converter.GetAddressOf());
         if (FAILED(hr)) return hr;
@@ -102,6 +102,16 @@ HRESULT ImageDecoder::Decode(const std::wstring& path, UINT maxSide, DecodedImag
         ComPtr<IWICBitmap> cached;
         hr = factory->CreateBitmapFromSource(converter.Get(), WICBitmapCacheOnLoad, cached.GetAddressOf());
         if (FAILED(hr)) return hr;
+        if (orientation >= 2 && orientation <= 8) {
+            ComPtr<IWICBitmapSource> oriented = cached;
+            hr = Orient(factory.Get(), orientation, oriented);
+            if (FAILED(hr)) return hr;
+            ComPtr<IWICBitmap> orientedCache;
+            hr = factory->CreateBitmapFromSource(oriented.Get(), WICBitmapCacheOnLoad,
+                                                 orientedCache.GetAddressOf());
+            if (FAILED(hr)) return hr;
+            cached = orientedCache;
+        }
         hr = cached->GetSize(&result.width, &result.height);
         if (FAILED(hr)) return hr;
         result.bitmap = cached;

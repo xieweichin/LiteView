@@ -105,7 +105,9 @@ HRESULT Metadata::ReadFrame(IWICBitmapFrameDecode* frame, PhotoMetadata& out) co
         if (Query(reader.Get(), {L"/app1/ifd/{ushort=272}", L"/ifd/{ushort=272}",
                                  L"System.Photo.CameraModel"}, p))
             result.cameraModel = Text(p.value);
-        if (Query(reader.Get(), {L"/app1/ifd/exif/{ushort=36867}", L"/ifd/exif/{ushort=36867}"}, p))
+        // DateTimeOriginal, falling back to the IFD0 DateTime.
+        if (Query(reader.Get(), {L"/app1/ifd/exif/{ushort=36867}", L"/ifd/exif/{ushort=36867}",
+                                 L"/app1/ifd/{ushort=306}", L"/ifd/{ushort=306}"}, p))
             result.dateTaken = Text(p.value);
         if (Query(reader.Get(), {L"/app1/ifd/exif/{ushort=33434}", L"/ifd/exif/{ushort=33434}",
                                  L"System.Photo.ExposureTime"}, p))
