@@ -76,6 +76,11 @@ public:
     // known not to decode, so the caller keeps the file-type icon.
     ThumbnailPtr TryGetCached(const ThumbnailRequest& request, bool* failed = nullptr) const noexcept;
 
+    // The file at request.path changed (rotated): forget its thumbnails in
+    // memory and the disk-cache file for this request's key, and stop using
+    // the shell thumbnail for it, since the shell may still have the old one.
+    void Invalidate(const ThumbnailRequest& request) noexcept;
+
     // Drops every request that has not started (scrolling, folder change).
     void CancelQueued() noexcept;
 

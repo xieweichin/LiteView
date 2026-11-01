@@ -235,3 +235,21 @@ TEST_CASE("the memory cache stays within its byte limit") {
     CHECK(cached >= 1);
     CHECK(cached <= 3);
 }
+
+TEST_CASE("invalidating a file drops its memory and disk thumbnails") {
+    ComApartment apartment;
+    TempDir dir;
+    Waiter waiter;
+    ThumbnailService service(waiter.Callback(), Options(dir.path));
+    const ThumbnailRequest request = RequestFor(Fixture(L"orientation-1.jpg"), 32);
+    service.Request(request, true);
+    REQUIRE(waiter.WaitFor(1));
+    REQUIRE(static_cast<bool>(service.TryGetCached(request)));
+    REQUIRE(dir.CountFiles() == 1);
+    service.Invalidate(request);
+    CHECK(!service.TryGetCached(request));
+    CHECK(dir.CountFiles() == 0);
+    service.Request(request, true);
+    REQUIRE(waiter.WaitFor(2));
+    CHECK(service.GetStats().decodes == 2);
+}

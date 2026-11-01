@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "core/FileOps.h"
 #include "core/ThreadPool.h"
 #include "res/resource.h"
 #include "ui/Messages.h"
@@ -93,7 +94,7 @@ HRESULT FolderTree::Create(HWND parent, HINSTANCE instance, UINT controlId, HWND
     }
     hwnd_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, nullptr,
                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_LINESATROOT |
-                                TVS_SHOWSELALWAYS | TVS_TRACKSELECT,
+                                TVS_SHOWSELALWAYS | TVS_TRACKSELECT | TVS_EDITLABELS,
                             0, 0, 0, 0, parent, reinterpret_cast<HMENU>(static_cast<UINT_PTR>(controlId)),
                             instance, nullptr);
     if (!hwnd_) return HRESULT_FROM_WIN32(GetLastError());
@@ -194,6 +195,11 @@ void FolderTree::RequestChildren(Node& node) {
 }
 
 void FolderTree::OnChildrenReady() {
+    if (!pendingRefresh_.empty()) {
+        const std::wstring path = pendingRefresh_;
+        pendingRefresh_.clear();
+        Refresh(path);
+    }
     std::vector<Shared::Result> results;
     {
         std::lock_guard<std::mutex> lock(shared_->mutex);
@@ -229,6 +235,14 @@ void FolderTree::OnChildrenReady() {
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
     ContinueReveal();
+    if (!editTarget_.empty()) {
+        if (Node* node = FindNode(editTarget_)) {
+            editTarget_.clear();
+            TreeView_EnsureVisible(hwnd_, node->item);
+            SetFocus(hwnd_);
+            TreeView_EditLabel(hwnd_, node->item);
+        }
+    }
 }
 
 bool FolderTree::OnNotify(NMHDR* header, LRESULT& result) {
@@ -242,6 +256,16 @@ bool FolderTree::OnNotify(NMHDR* header, LRESULT& result) {
         result = FALSE;
         return true;
     }
+    case TVN_BEGINLABELEDITW: {
+        // Drives cannot be renamed here.
+        auto* info = reinterpret_cast<NMTVDISPINFOW*>(header);
+        Node* node = NodeFromItem(info->item.hItem);
+        result = (!node || node->path.size() <= 3) ? TRUE : FALSE;
+        return true;
+    }
+    case TVN_ENDLABELEDITW:
+        result = OnEndLabelEdit(reinterpret_cast<NMTVDISPINFOW*>(header)) ? TRUE : FALSE;
+        return true;
     case TVN_SELCHANGEDW: {
         auto* nm = reinterpret_cast<NMTREEVIEWW*>(header);
         if (!selectingProgrammatically_ && nm->action != TVC_UNKNOWN) {
@@ -302,4 +326,72 @@ void FolderTree::ContinueReveal() {
         selectingProgrammatically_ = false;
     }
     revealTarget_.clear();
+}
+
+FolderTree::Node* FolderTree::FindNode(const std::wstring& path) const {
+    const std::wstring target = Normalize(path);
+    for (const auto& entry : nodes_) {
+        if (SamePath(entry.second->path, target)) return entry.second.get();
+    }
+    return nullptr;
+}
+
+void FolderTree::Refresh(const std::wstring& path) {
+    Node* node = FindNode(path);
+    if (!node || node->loading) return;
+    const bool expanded = (TreeView_GetItemState(hwnd_, node->item, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
+    // Drop the children (and their bookkeeping), then list again.
+    for (HTREEITEM child = TreeView_GetChild(hwnd_, node->item); child;) {
+        HTREEITEM next = TreeView_GetNextSibling(hwnd_, child);
+        TreeView_DeleteItem(hwnd_, child);
+        child = next;
+    }
+    for (auto it = nodes_.begin(); it != nodes_.end();) {
+        const std::wstring& p = it->second->path;
+        const bool below = p.size() > node->path.size() && IsUnder(p, node->path);
+        it = below ? nodes_.erase(it) : std::next(it);
+    }
+    node->populated = false;
+    TVITEMW tvi = {};
+    tvi.mask = TVIF_CHILDREN | TVIF_HANDLE;
+    tvi.hItem = node->item;
+    tvi.cChildren = 1;
+    TreeView_SetItem(hwnd_, &tvi);
+    if (expanded) RequestChildren(*node);
+}
+
+void FolderTree::EditChildWhenListed(const std::wstring& parent, const std::wstring& name) {
+    editTarget_ = Join(Normalize(parent), name);
+    Node* node = FindNode(parent);
+    if (!node) {
+        editTarget_.clear();
+        return;
+    }
+    Refresh(parent);
+    if (!node->loading) RequestChildren(*node);
+    TreeView_Expand(hwnd_, node->item, TVE_EXPAND);
+}
+
+bool FolderTree::OnEndLabelEdit(NMTVDISPINFOW* info) {
+    if (!info->item.pszText) return false;  // cancelled
+    Node* node = NodeFromItem(info->item.hItem);
+    if (!node) return false;
+    const std::wstring name = info->item.pszText;
+    if (!FileOps::IsValidFileName(name)) {
+        MessageBeep(MB_ICONWARNING);
+        return false;
+    }
+    const auto slash = node->path.find_last_of(L'\\');
+    if (slash == std::wstring::npos) return false;
+    const std::wstring parent = node->path.substr(0, slash == 2 ? 3 : slash);
+    const std::wstring target = Join(parent, name);
+    if (FAILED(FileOps::Rename(node->path, target))) {
+        MessageBeep(MB_ICONWARNING);
+        return false;
+    }
+    // Paths below the renamed folder changed: list the parent again, but not
+    // while the control is still inside this notification.
+    pendingRefresh_ = parent;
+    PostMessageW(GetParent(hwnd_), WM_APP_TREE_CHILDREN, 0, 0);
+    return false;  // the refresh supplies the new label
 }

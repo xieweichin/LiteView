@@ -36,6 +36,12 @@ public:
     // navigate callback. Continues asynchronously as levels are loaded.
     void RevealPath(const std::wstring& path);
 
+    // Re-reads the sub-folders of `path` (after creating or renaming one).
+    void Refresh(const std::wstring& path);
+    // Starts in-place renaming of the child folder `name` of `parent`,
+    // once it is listed.
+    void EditChildWhenListed(const std::wstring& parent, const std::wstring& name);
+
     // Handles WM_NOTIFY from the tree control. Returns true if handled.
     bool OnNotify(NMHDR* header, LRESULT& result);
     void OnChildrenReady();
@@ -65,6 +71,8 @@ private:
     void ContinueReveal();
     Node* NodeFromItem(HTREEITEM item) const;
     HTREEITEM FindChild(HTREEITEM parent, const std::wstring& path) const;
+    Node* FindNode(const std::wstring& path) const;
+    bool OnEndLabelEdit(NMTVDISPINFOW* info);
 
     HWND hwnd_ = nullptr;
     HINSTANCE instance_ = nullptr;
@@ -74,6 +82,8 @@ private:
     int folderImage_ = 0;
     int folderOpenImage_ = 0;
     std::wstring revealTarget_;
+    std::wstring editTarget_;      // full path to rename once it appears
+    std::wstring pendingRefresh_;  // folder to list again outside a notification
     bool selectingProgrammatically_ = false;
     std::shared_ptr<Shared> shared_;
     std::unique_ptr<ThreadPool> pool_;  // declared last: joined first

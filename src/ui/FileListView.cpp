@@ -218,6 +218,13 @@ void FileListView::Reset(const SavedSelection& saved, std::uint32_t generation) 
 
 void FileListView::SelectAll() { ListView_SetItemState(hwnd_, -1, LVIS_SELECTED, LVIS_SELECTED); }
 
+void FileListView::BeginRename(int index) {
+    if (index < 0 || static_cast<std::size_t>(index) >= model_.Count()) return;
+    SetFocus(hwnd_);
+    SelectOnly(index);
+    ListView_EditLabel(hwnd_, index);
+}
+
 void FileListView::SelectOnly(int index) {
     if (index < 0 || static_cast<std::size_t>(index) >= model_.Count()) return;
     ListView_SetItemState(hwnd_, -1, 0, LVIS_SELECTED);
@@ -386,9 +393,26 @@ bool FileListView::OnNotify(NMHDR* header, LRESULT& result) {
         // ones are requested again as they paint.
         if (thumbnails_) thumbnails_->CancelQueued();
         return true;
-    case LVN_BEGINLABELEDITW:
-        result = TRUE;  // in-place rename arrives with T7
+    case LVN_BEGINLABELEDITW: {
+        // Select the name without its extension, like Explorer.
+        auto* info = reinterpret_cast<NMLVDISPINFOW*>(header);
+        result = onRename_ ? FALSE : TRUE;
+        if (HWND edit = ListView_GetEditControl(hwnd_)) {
+            if (info->item.iItem >= 0 && static_cast<std::size_t>(info->item.iItem) < model_.Count()) {
+                const std::wstring& name = model_.At(static_cast<std::size_t>(info->item.iItem)).name;
+                const auto dot = name.find_last_of(L'.');
+                // Posted: the control selects all text after this notification returns.
+                PostMessageW(edit, EM_SETSEL, 0, dot == std::wstring::npos || dot == 0 ? -1 : static_cast<LPARAM>(dot));
+            }
+        }
         return true;
+    }
+    case LVN_ENDLABELEDITW: {
+        auto* info = reinterpret_cast<NMLVDISPINFOW*>(header);
+        result = FALSE;
+        if (info->item.pszText && onRename_) result = onRename_(info->item.iItem, info->item.pszText) ? TRUE : FALSE;
+        return true;
+    }
     }
     return false;
 }

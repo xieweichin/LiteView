@@ -68,6 +68,10 @@ public:
     using ColumnClick = std::function<void(SortKey key)>;
     using ItemActivate = std::function<void(int index)>;
     using SelectionChanged = std::function<void()>;
+    // In-place rename finished with a new name; return true if the file was renamed.
+    using RenameRequested = std::function<bool(int index, const std::wstring& newName)>;
+    void SetRenameCallback(RenameRequested cb) { onRename_ = std::move(cb); }
+    void BeginRename(int index);
     void SetColumnClickCallback(ColumnClick cb) { onColumnClick_ = std::move(cb); }
     void SetActivateCallback(ItemActivate cb) { onActivate_ = std::move(cb); }
     void SetSelectionChangedCallback(SelectionChanged cb) { onSelectionChanged_ = std::move(cb); }
@@ -101,4 +105,5 @@ private:
     ColumnClick onColumnClick_;
     ItemActivate onActivate_;
     SelectionChanged onSelectionChanged_;
+    RenameRequested onRename_;
 };

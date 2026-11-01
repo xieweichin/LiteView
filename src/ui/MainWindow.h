@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "core/FolderModel.h"
 #include "core/ThumbnailService.h"
@@ -97,6 +98,22 @@ private:
     UINT ScreenSide() const;
     int ViewerIndex() const;  // current index of the viewed item, or -1
 
+    // File management (T7)
+    std::wstring PickFolder(UINT titleId) const;
+    std::vector<std::wstring> TargetPaths() const;  // selection, or the viewed picture
+    int FindIndexByPath(const std::wstring& path) const;
+    void CopyOrMoveSelection(bool move);
+    void DeleteSelection();
+    void RenameSelection();
+    bool RenameItem(int index, const std::wstring& newName);
+    void NewFolder();
+    void RotateSelection(bool clockwise);
+    void OnRotated();
+    void ShowProperties();
+    void ShowContextMenu(POINT screen);
+    void AfterRemovingViewed(int index);
+    void ShowError(UINT id, const std::wstring& detail);
+
     // Layout and splitters
     void Layout();
     Splitter HitTestSplitter(POINT client) const;
@@ -154,6 +171,13 @@ private:
     WINDOWPLACEMENT windowedPlacement_{sizeof(WINDOWPLACEMENT)};
     LONG_PTR windowedStyle_ = 0;
     HMENU menu_ = nullptr;
+    int selectIndexAfterLoad_ = -1;  // keeps the cursor in place after a delete or move
+
+    struct RotateState;
+    std::shared_ptr<RotateState> rotateState_;
+    std::unique_ptr<ThreadPool> rotatePool_;
+    std::size_t rotationsPending_ = 0;
+    std::size_t rotationFailures_ = 0;
 
     std::shared_ptr<ThreadPool> pool_;
     std::unique_ptr<FolderModel> model_;

@@ -43,7 +43,9 @@ add_library(LiteViewCore STATIC
     src/core/Settings.cpp
     src/core/ThreadPool.cpp
     src/core/ThumbnailService.cpp
-    src/core/ViewerCache.cpp)
+    src/core/ViewerCache.cpp
+    src/core/Rotator.cpp
+    src/core/FileOps.cpp)
 target_include_directories(LiteViewCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(LiteViewCore PUBLIC liteview_options windowscodecs shlwapi shell32 ole32 uuid)
 
@@ -59,6 +61,8 @@ add_executable(LiteView WIN32
     src/ui/PreviewPane.cpp
     src/ui/PreviewPane.h
     src/ui/ViewerView.cpp
+    src/ui/PropertiesDialog.cpp
+    src/ui/PropertiesDialog.h
     src/ui/ViewerView.h
     src/ui/Messages.h
     src/ui/Commands.h

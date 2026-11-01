@@ -278,6 +278,8 @@ struct ThumbnailService::Shared {
     std::unordered_map<std::wstring, std::list<std::pair<std::wstring, ThumbnailPtr>>::iterator> index;
     std::size_t memoryBytes = 0;
     std::unordered_set<std::wstring> failed;
+    std::unordered_map<std::wstring, std::vector<std::wstring>> keysByPath;  // lower-case path -> keys
+    std::unordered_set<std::wstring> skipShell;                             // lower-case paths
     std::unordered_map<std::wstring, ThreadPool::TaskId> queued;
     bool directoryResolved = false;
     std::wstring directory;
@@ -350,7 +352,13 @@ struct ThumbnailService::Shared {
         return it->second->second;
     }
 
-    void Store(const std::wstring& key, ThumbnailPtr thumbnail) {
+    static std::wstring Lower(std::wstring text) {
+        if (!text.empty()) CharLowerBuffW(text.data(), static_cast<DWORD>(text.size()));
+        return text;
+    }
+
+    void Store(const std::wstring& path, const std::wstring& key, ThumbnailPtr thumbnail) {
+        keysByPath[Lower(path)].push_back(key);
         const std::size_t bytes = static_cast<std::size_t>(thumbnail->width) * thumbnail->height * 4;
         auto existing = index.find(key);
         if (existing != index.end()) {
@@ -453,6 +461,35 @@ void ThumbnailService::Request(const ThumbnailRequest& request, bool visible) no
     }
 }
 
+void ThumbnailService::Invalidate(const ThumbnailRequest& request) noexcept {
+    try {
+        const std::wstring key = CacheKey(request);
+        const std::wstring lower = Shared::Lower(request.path);
+        std::wstring directory;
+        {
+            std::lock_guard<std::mutex> lock(shared_->mutex);
+            auto keys = shared_->keysByPath.find(lower);
+            if (keys != shared_->keysByPath.end()) {
+                for (const auto& k : keys->second) {
+                    auto it = shared_->index.find(k);
+                    if (it == shared_->index.end()) continue;
+                    const auto& old = it->second->second;
+                    shared_->memoryBytes -= static_cast<std::size_t>(old->width) * old->height * 4;
+                    shared_->lru.erase(it->second);
+                    shared_->index.erase(it);
+                }
+                shared_->keysByPath.erase(keys);
+            }
+            shared_->failed.erase(key);
+            shared_->skipShell.insert(lower);
+            directory = shared_->directoryResolved ? shared_->directory : std::wstring();
+        }
+        if (directory.empty()) directory = shared_->Directory();
+        if (!directory.empty()) DeleteFileW(Join(directory, key + kExtension).c_str());
+    } catch (...) {
+    }
+}
+
 void ThumbnailService::CancelQueued() noexcept {
     std::lock_guard<std::mutex> lock(shared_->mutex);
     for (const auto& entry : shared_->queued) pool_->Cancel(entry.second);
@@ -481,7 +518,12 @@ void ThumbnailService::Work(const std::shared_ptr<Shared>& shared, ThumbnailRequ
             Touch(cacheFile);
             ++shared->stats.diskHits;
         }
-        if (SUCCEEDED(hr) && !thumbnail && shared->options.useShellThumbnails &&
+        bool skipShell = false;
+        {
+            std::lock_guard<std::mutex> lock(shared->mutex);
+            skipShell = shared->skipShell.count(Shared::Lower(request.path)) != 0;
+        }
+        if (SUCCEEDED(hr) && !thumbnail && shared->options.useShellThumbnails && !skipShell &&
             SUCCEEDED(ShellThumbnail(request.path, request.size, thumbnail))) {
             ++shared->stats.shellHits;
         }
@@ -499,7 +541,7 @@ void ThumbnailService::Work(const std::shared_ptr<Shared>& shared, ThumbnailRequ
         {
             std::lock_guard<std::mutex> lock(shared->mutex);
             if (thumbnail) {
-                shared->Store(key, thumbnail);
+                shared->Store(request.path, key, thumbnail);
             } else {
                 shared->failed.insert(key);
                 ++shared->stats.failures;

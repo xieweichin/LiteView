@@ -37,6 +37,10 @@ public:
     void Clear();
     void SetFullscreen(bool fullscreen);
 
+    // Shows the picture turned a quarter while the rotated file is saved and
+    // decoded again; cleared when a new decode arrives.
+    void RotatePending(bool clockwise);
+
     void ZoomIn();
     void ZoomOut();
     void ToggleFit();
@@ -80,4 +84,5 @@ private:
     bool dragging_ = false;
     POINT dragLast_{};
     int wheelRemainder_ = 0;
+    int pendingTurns_ = 0;  // quarter turns clockwise, 0..3
 };

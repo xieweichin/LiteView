@@ -185,8 +185,11 @@ void ViewerView::SetImage(const std::wstring& path, ViewerImagePtr image, Thumbn
     const bool samePath = !path_.empty() &&
                           CompareStringOrdinal(path.c_str(), -1, path_.c_str(), -1, TRUE) == CSTR_EQUAL;
     const bool hadImage = static_cast<bool>(image_);
+    const bool sizeChanged = hadImage && image &&
+                             (image->originalWidth != image_->originalWidth || image->originalHeight != image_->originalHeight);
     path_ = path;
     if (image) {
+        if (image != image_) pendingTurns_ = 0;  // a fresh decode already shows the saved rotation
         image_ = std::move(image);
         placeholder_.reset();
     } else if (!samePath) {
@@ -194,7 +197,8 @@ void ViewerView::SetImage(const std::wstring& path, ViewerImagePtr image, Thumbn
         placeholder_ = std::move(placeholder);
     }
     failed_ = failed && !image_;
-    if (!samePath || !hadImage) {
+    if (!samePath) pendingTurns_ = 0;
+    if (!samePath || !hadImage || sizeChanged) {
         // A new picture starts fitted and centred.
         fit_ = true;
         scale_ = 1.0;
@@ -215,6 +219,12 @@ void ViewerView::Clear() {
     bitmap_.Reset();
     bitmapSource_ = nullptr;
     failed_ = false;
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void ViewerView::RotatePending(bool clockwise) {
+    if (!image_) return;
+    pendingTurns_ = (pendingTurns_ + (clockwise ? 1 : 3)) % 4;
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -347,7 +357,20 @@ void ViewerView::OnPaint() {
     }
     target_->BeginDraw();
     target_->Clear(fullscreen_ ? D2D1::ColorF(0, 0, 0) : D2D1::ColorF(0.19f, 0.19f, 0.19f));
-    if (bitmap_ && image_) {
+    if (bitmap_ && image_ && pendingTurns_ != 0) {
+        // Turned preview: fit the rotated picture, ignoring zoom.
+        const bool sideways = pendingTurns_ % 2 != 0;
+        const double w = image_->originalWidth, h = image_->originalHeight;
+        const double scale = std::min({1.0, view.cx / (sideways ? h : w), view.cy / (sideways ? w : h)});
+        const D2D1_RECT_F dest = D2D1::RectF(static_cast<float>(view.cx / 2.0 - w * scale / 2),
+                                             static_cast<float>(view.cy / 2.0 - h * scale / 2),
+                                             static_cast<float>(view.cx / 2.0 + w * scale / 2),
+                                             static_cast<float>(view.cy / 2.0 + h * scale / 2));
+        target_->SetTransform(D2D1::Matrix3x2F::Rotation(90.0f * pendingTurns_,
+                                                         D2D1::Point2F(view.cx / 2.0f, view.cy / 2.0f)));
+        target_->DrawBitmap(bitmap_.Get(), dest, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        target_->SetTransform(D2D1::Matrix3x2F::Identity());
+    } else if (bitmap_ && image_) {
         const double scale = EffectiveScale();
         const double w = image_->originalWidth * scale, h = image_->originalHeight * scale;
         const double left = view.cx / 2.0 - centerX_ * scale;
