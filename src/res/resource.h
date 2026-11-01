@@ -24,4 +24,10 @@
 #define IDS_STATUS_SELECTED         1122
 #define IDS_ERR_OPEN_FOLDER         1123
 
+// Viewer (T6)
+#define IDS_VIEWER_ERROR            1200
+#define IDS_VIEWER_INDEX            1201
+#define IDS_VIEWER_ZOOM             1202
+#define IDS_VIEWER_LOADING          1203
+
 // Toolbar tooltips use the command ID as the string ID.

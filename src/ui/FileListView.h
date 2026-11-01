@@ -11,7 +11,7 @@
 
 #include "core/FolderModel.h"
 
-class ThumbnailService;
+#include "core/ThumbnailService.h"
 
 // Right-hand file list. A virtual (LVS_OWNERDATA) list view over FolderModel,
 // so a folder with tens of thousands of images costs no per-item allocation
@@ -57,6 +57,10 @@ public:
     void OnThumbnailReady(std::uint32_t generation, std::uint32_t itemId);
 
     void SelectAll();
+    // Selects and focuses only `index` and scrolls it into view.
+    void SelectOnly(int index);
+    // The request the Thumbnails view uses for `index` (to look up its thumbnail).
+    ThumbnailRequest MakeThumbnailRequest(int index) const;
     int FocusedIndex() const;
     std::vector<int> SelectedIndices() const;
     Selection GetSelection() const;

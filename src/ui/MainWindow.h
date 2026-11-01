@@ -12,6 +12,8 @@
 #include "ui/FileListView.h"
 #include "ui/FolderTree.h"
 #include "ui/PreviewPane.h"
+#include "ui/ViewerView.h"
+#include "core/ViewerCache.h"
 
 class ThreadPool;
 
@@ -43,6 +45,7 @@ private:
         int viewMode = static_cast<int>(FileListView::ViewMode::Details);
         int sortKey = static_cast<int>(SortKey::Name);
         bool sortAscending = true;
+        int slideshowSeconds = 3;
     };
     enum class Splitter { None, Vertical, Horizontal };
 
@@ -80,6 +83,19 @@ private:
     void UpdateStatus();
     void UpdatePreview();
     void SetStatusText(int part, const std::wstring& text);
+
+    // Viewer
+    void EnterViewer(int index);
+    void ExitViewer();
+    void ShowViewerIndex(int index, int direction);
+    void ViewerStep(int step);
+    void RefreshViewerImage();
+    void UpdateViewerStatus();
+    void SetFullscreen(bool fullscreen);
+    void ToggleSlideshow();
+    void StopSlideshow();
+    UINT ScreenSide() const;
+    int ViewerIndex() const;  // current index of the viewed item, or -1
 
     // Layout and splitters
     void Layout();
@@ -127,10 +143,24 @@ private:
     int dragOffset_ = 0;
     RECT content_{};  // area between path bar and status bar
 
+    // Viewer state
+    std::uint32_t viewerItemId_ = 0;
+    std::wstring viewerPath_;
+    int viewerDirection_ = 1;
+    bool openViewerOnLoad_ = false;
+    bool fullscreen_ = false;
+    bool slideshow_ = false;
+    int slideshowSeconds_ = 3;
+    WINDOWPLACEMENT windowedPlacement_{sizeof(WINDOWPLACEMENT)};
+    LONG_PTR windowedStyle_ = 0;
+    HMENU menu_ = nullptr;
+
     std::shared_ptr<ThreadPool> pool_;
     std::unique_ptr<FolderModel> model_;
     std::unique_ptr<ThumbnailService> thumbnails_;
     std::unique_ptr<FileListView> list_;
     FolderTree tree_;
     PreviewPane preview_;
+    std::unique_ptr<ViewerCache> viewerCache_;
+    ViewerView viewer_;
 };
