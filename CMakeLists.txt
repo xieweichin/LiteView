@@ -38,6 +38,8 @@ endif()
 # ---- Core layer (no UI, unit tested) -----------------------------------------
 add_library(LiteViewCore STATIC
     src/core/FolderModel.cpp
+    src/core/ImageDecoder.cpp
+    src/core/Metadata.cpp
     src/core/Settings.cpp
     src/core/ThreadPool.cpp)
 target_include_directories(LiteViewCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
