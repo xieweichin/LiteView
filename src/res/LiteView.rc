@@ -153,6 +153,8 @@ BEGIN
     END
     POPUP "說明(&H)"
     BEGIN
+        MENUITEM "取得更多圖片格式(&G)...",      IDM_HELP_CODECS
+        MENUITEM SEPARATOR
         MENUITEM "關於 LiteView(&A)",            IDM_HELP_ABOUT
     END
 END
@@ -223,6 +225,13 @@ BEGIN
     IDS_VIEWER_INDEX        "%u / %u"
     IDS_VIEWER_ZOOM         "%u%"
     IDS_VIEWER_LOADING      "載入中…"
+    IDS_VIEWER_ERROR_HEIF   "無法開啟這張圖片。HEIC 照片還需要安裝 Microsoft Store 的「HEVC 視訊延伸模組」。"
+
+    IDS_STATUS_CODEC_HINT   "有 %u 個 %s 檔案需要安裝 Windows 擴充才能預覽，按這裡安裝"
+    IDS_CODECS_TITLE        "取得更多圖片格式"
+    IDS_CODECS_ALL_INSTALLED "HEIF（HEIC）、WebP、AVIF、相機 RAW、JPEG XL 都已可預覽。\n\nHEIC 照片若仍打不開，請另外安裝 Microsoft Store 的「HEVC 視訊延伸模組」。"
+    IDS_CODECS_MISSING      "這台電腦還不能預覽：%s\n\n這些格式由 Windows 解碼，需要從 Microsoft Store 安裝對應的影像延伸模組（多數免費；HEIC 照片另需 HEVC 視訊延伸模組）。裝好後按 F5 重新整理即可。\n\n要現在開啟 %s 的安裝頁面嗎？"
+    IDS_LIST_SEPARATOR      "、"
 
     IDS_NEW_FOLDER          "新增資料夾"
     IDS_PICK_COPY_TARGET    "複製到哪個資料夾"

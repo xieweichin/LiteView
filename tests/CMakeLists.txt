@@ -2,6 +2,7 @@ add_executable(LiteViewTests
     test_main.cpp
     test_smoke.cpp
     test_folder_model.cpp
+    test_format_support.cpp
     test_image_decoder.cpp
     test_settings.cpp
     test_thread_pool.cpp

@@ -85,7 +85,8 @@ Nov 1, 2026 · @偉欽
 格式全靠 Windows 內建的 WIC 解碼，不內嵌第三方函式庫，這是安裝檔能維持 2 MB 以內的關鍵。
 
 - **一定支援**：JPEG、PNG、GIF（第一影格）、BMP、TIFF、ICO。
-- **有裝系統擴充就支援**：WebP、HEIC、AVIF、各家相機 RAW（Windows 10/11 從 Microsoft Store 裝擴充即可）。
+- **有裝系統擴充就支援**：WebP、HEIC、AVIF、各家相機 RAW、JPEG XL（Windows 10/11 從 Microsoft Store 裝擴充即可）。
+  資料夾裡有這些格式但還沒裝擴充時，狀態列會顯示「有 N 個 … 檔案需要安裝 Windows 擴充」，按一下直接開 Store 安裝頁；「說明 → 取得更多圖片格式」可檢查整台電腦缺哪些。HEIC 另需 HEVC 視訊延伸模組，打不開時檢視畫面會提示。
 
 | 指標 | 目標 |
 | --- | --- |

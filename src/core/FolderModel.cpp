@@ -1,8 +1,8 @@
 #include "core/FolderModel.h"
 
+#include "core/FormatSupport.h"
+
 #include <shlwapi.h>
-#include <wincodec.h>
-#include <wrl/client.h>
 
 #include <algorithm>
 #include <atomic>
@@ -11,8 +11,6 @@
 #include <new>
 #include <utility>
 #include <vector>
-
-using Microsoft::WRL::ComPtr;
 
 namespace {
 
@@ -36,55 +34,6 @@ std::wstring Join(const std::wstring& path, const std::wstring& name) {
 const wchar_t* Extension(const std::wstring& name) {
     const auto dot = name.find_last_of(L'.');
     return dot == std::wstring::npos ? L"" : name.c_str() + dot;
-}
-
-HRESULT DecoderExtensions(std::vector<std::wstring>& extensions) {
-    ComPtr<IWICImagingFactory> factory;
-    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                                  IID_PPV_ARGS(factory.GetAddressOf()));
-    if (FAILED(hr)) return hr;
-    ComPtr<IEnumUnknown> enumerator;
-    hr = factory->CreateComponentEnumerator(WICDecoder, WICComponentEnumerateDefault,
-                                             enumerator.GetAddressOf());
-    if (FAILED(hr)) return hr;
-    for (;;) {
-        ComPtr<IUnknown> unknown;
-        ULONG fetched = 0;
-        hr = enumerator->Next(1, unknown.GetAddressOf(), &fetched);
-        if (FAILED(hr)) return hr;
-        if (hr == S_FALSE || fetched == 0) break;
-        ComPtr<IWICBitmapDecoderInfo> decoder;
-        if (FAILED(unknown.As(&decoder))) continue;
-        UINT needed = 0;
-        hr = decoder->GetFileExtensions(0, nullptr, &needed);
-        if (FAILED(hr) && hr != WINCODEC_ERR_INSUFFICIENTBUFFER) continue;
-        if (needed == 0 || needed > 65536) continue;
-        std::vector<wchar_t> buffer(needed);
-        if (FAILED(decoder->GetFileExtensions(needed, buffer.data(), &needed))) continue;
-        std::wstring values(buffer.data());
-        std::size_t start = 0;
-        while (start <= values.size()) {
-            const std::size_t comma = values.find_first_of(L",;", start);
-            std::wstring extension = values.substr(start, comma == std::wstring::npos ? comma : comma - start);
-            const auto first = extension.find_first_not_of(L" \t\r\n");
-            const auto last = extension.find_last_not_of(L" \t\r\n");
-            if (first != std::wstring::npos) {
-                extension = extension.substr(first, last - first + 1);
-                if (!extension.empty() && extension.front() == L'.') extensions.push_back(std::move(extension));
-            }
-            if (comma == std::wstring::npos) break;
-            start = comma + 1;
-        }
-    }
-    return extensions.empty() ? WINCODEC_ERR_COMPONENTNOTFOUND : S_OK;
-}
-
-bool IsSupported(const std::wstring& name, const std::vector<std::wstring>& extensions) {
-    const wchar_t* extension = Extension(name);
-    for (const auto& supported : extensions) {
-        if (_wcsicmp(extension, supported.c_str()) == 0) return true;
-    }
-    return false;
 }
 
 int Compare(const FileItem& left, const FileItem& right, SortKey key) {
@@ -120,8 +69,10 @@ struct FolderModel::State {
     std::shared_ptr<const std::vector<FileItem>> active = std::make_shared<const std::vector<FileItem>>();
     std::wstring activePath;
     std::uint32_t activeGeneration = 0;
+    CodecGap activeGap;
     std::shared_ptr<const std::vector<FileItem>> pending;
     std::wstring pendingPath;
+    CodecGap pendingGap;
     HRESULT pendingResult = E_PENDING;
     HRESULT lastResult = S_OK;
     bool hasPending = false;
@@ -197,6 +148,7 @@ void FolderModel::Load(const std::shared_ptr<State>& state, std::wstring path,
                        std::uint32_t generation) noexcept {
     HRESULT result = S_OK;
     std::vector<FileItem> items;
+    CodecGap gap;
     try {
         if (state->stopping || state->generation != generation) return;
         const DWORD attributes = GetFileAttributesW(path.c_str());
@@ -221,7 +173,16 @@ void FolderModel::Load(const std::shared_ptr<State>& state, std::wstring path,
                     } else {
                         do {
                             if (state->stopping || state->generation != generation) return;
-                            if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && IsSupported(data.cFileName, extensions)) {
+                            if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                            const wchar_t* extension = PathFindExtensionW(data.cFileName);
+                            CodecPack pack;
+                            if (!HasExtension(extensions, extension)) {
+                                // A known format whose codec extension is not installed.
+                                if (CodecPackForExtension(extension, pack)) {
+                                    ++gap.files;
+                                    gap.packs |= CodecPackBit(pack);
+                                }
+                            } else {
                                 std::uint32_t id = state->nextItemId.fetch_add(1);
                                 if (id == 0) id = state->nextItemId.fetch_add(1);
                                 items.push_back(FileItem{data.cFileName,
@@ -240,26 +201,26 @@ void FolderModel::Load(const std::shared_ptr<State>& state, std::wstring path,
     } catch (...) {
         result = E_FAIL;
     }
-    Finish(state, std::move(path), generation, result, std::move(items));
+    Finish(state, std::move(path), generation, result, std::move(items), gap);
 }
 
 void FolderModel::SortCopy(const std::shared_ptr<State>& state,
                            std::shared_ptr<const std::vector<FileItem>> source,
-                           std::wstring path, std::uint32_t generation) noexcept {
+                           std::wstring path, std::uint32_t generation, CodecGap gap) noexcept {
     try {
         if (state->stopping || state->generation != generation) return;
         std::vector<FileItem> items(*source);
-        Finish(state, std::move(path), generation, S_OK, std::move(items));
+        Finish(state, std::move(path), generation, S_OK, std::move(items), gap);
     } catch (const std::bad_alloc&) {
-        Finish(state, std::move(path), generation, E_OUTOFMEMORY, {});
+        Finish(state, std::move(path), generation, E_OUTOFMEMORY, {}, {});
     } catch (...) {
-        Finish(state, std::move(path), generation, E_FAIL, {});
+        Finish(state, std::move(path), generation, E_FAIL, {}, {});
     }
 }
 
 void FolderModel::Finish(const std::shared_ptr<State>& state, std::wstring path,
                          std::uint32_t generation, HRESULT result,
-                         std::vector<FileItem> items) noexcept {
+                         std::vector<FileItem> items, CodecGap gap) noexcept {
     try {
         for (;;) {
             if (state->stopping || state->generation != generation) return;
@@ -285,6 +246,7 @@ void FolderModel::Finish(const std::shared_ptr<State>& state, std::wstring path,
                 if (revision != state->sortRevision) continue;
                 state->pending = SUCCEEDED(result) ? std::make_shared<const std::vector<FileItem>>(std::move(items)) : nullptr;
                 state->pendingPath = std::move(path);
+                state->pendingGap = SUCCEEDED(result) ? gap : CodecGap{};
                 state->pendingResult = result;
                 state->hasPending = true;
                 state->loading = false;
@@ -324,6 +286,7 @@ void FolderModel::Sort(SortKey key, bool ascending) noexcept {
         if (state->stopping) return;
         std::shared_ptr<const std::vector<FileItem>> source;
         std::wstring path;
+        CodecGap gap;
         const std::uint32_t generation = state->generation;
         {
             std::lock_guard<std::mutex> lock(state->dataMutex);
@@ -334,16 +297,18 @@ void FolderModel::Sort(SortKey key, bool ascending) noexcept {
             if (state->hasPending && SUCCEEDED(state->pendingResult)) {
                 source = state->pending;
                 path = state->pendingPath;
+                gap = state->pendingGap;
             } else if (state->activeGeneration == generation) {
                 source = state->active;
                 path = state->activePath;
+                gap = state->activeGap;
             }
             if (!source) return;
             state->loading = true;
             state->lastResult = E_PENDING;
         }
-        const HRESULT hr = pool_->Submit([state, source, path, generation] {
-            SortCopy(state, source, path, generation);
+        const HRESULT hr = pool_->Submit([state, source, path, generation, gap] {
+            SortCopy(state, source, path, generation, gap);
         });
         if (FAILED(hr)) {
             std::lock_guard<std::mutex> lock(state->dataMutex);
@@ -367,6 +332,7 @@ HRESULT FolderModel::Commit(std::uint32_t generation) noexcept {
     if (SUCCEEDED(hr)) {
         state_->active = std::move(state_->pending);
         state_->activePath = std::move(state_->pendingPath);
+        state_->activeGap = state_->pendingGap;
         state_->activeGeneration = generation;
     }
     state_->hasPending = false;
@@ -378,6 +344,12 @@ HRESULT FolderModel::LastResult() const noexcept {
     if (!state_) return E_OUTOFMEMORY;
     std::lock_guard<std::mutex> lock(state_->dataMutex);
     return state_->lastResult;
+}
+
+CodecGap FolderModel::MissingCodecs() const noexcept {
+    if (!state_) return {};
+    std::lock_guard<std::mutex> lock(state_->dataMutex);
+    return state_->activeGap;
 }
 
 std::size_t FolderModel::Count() const noexcept {
