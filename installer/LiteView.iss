@@ -1,9 +1,9 @@
 ﻿; LiteView 安裝檔（Inno Setup 6）
-; 建置：iscc /DAppVersion=0.2.0 /DSourceExe=..\build\Release\LiteView.exe installer\LiteView.iss
+; 建置：iscc /DAppVersion=0.3.0 /DSourceExe=..\build\Release\LiteView.exe installer\LiteView.iss
 ; 只裝給目前使用者，不需要系統管理員權限；檔案關聯寫在 HKCU，預設不勾。
 
 #ifndef AppVersion
-  #define AppVersion "0.2.0"
+  #define AppVersion "0.3.0"
 #endif
 #ifndef SourceExe
   #define SourceExe "..\build\Release\LiteView.exe"
@@ -34,9 +34,9 @@ UninstallDisplayName=LiteView
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-; 不放精靈圖片，讓安裝檔維持在 2.5 MB 以內。
+; 不放左側大圖，讓安裝檔維持在 2.5 MB 以內；右上角只放小 logo（一般／高 DPI 兩種）。
 WizardImageFile=
-WizardSmallImageFile=
+WizardSmallImageFile=WizardSmall-55.bmp,WizardSmall-110.bmp
 ChangesAssociations=yes
 CloseApplications=yes
 
