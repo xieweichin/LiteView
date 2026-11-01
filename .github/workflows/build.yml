@@ -52,7 +52,7 @@ jobs:
         run: |
           # Pin Inno Setup 6.4.3 (official installer): newer setup stubs alone are close to 2 MB.
           $dir = "$env:RUNNER_TEMP\InnoSetup643"
-          Invoke-WebRequest "https://files.jrsoftware.org/is/6/innosetup-6.4.3.exe" -OutFile "$env:RUNNER_TEMP\is643.exe"
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-6_4_3/innosetup-6.4.3.exe" -OutFile "$env:RUNNER_TEMP\is643.exe"
           Start-Process "$env:RUNNER_TEMP\is643.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=$dir" -Wait
           $iscc = "$dir\ISCC.exe"
           $stub = Get-Item "$dir\Setup.e32"
