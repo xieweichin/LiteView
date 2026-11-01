@@ -41,7 +41,8 @@ add_library(LiteViewCore STATIC
     src/core/ImageDecoder.cpp
     src/core/Metadata.cpp
     src/core/Settings.cpp
-    src/core/ThreadPool.cpp)
+    src/core/ThreadPool.cpp
+    src/core/ThumbnailService.cpp)
 target_include_directories(LiteViewCore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(LiteViewCore PUBLIC liteview_options windowscodecs shlwapi shell32 ole32 uuid)
 
@@ -62,7 +63,7 @@ add_executable(LiteView WIN32
     src/res/LiteView.rc)
 target_include_directories(LiteView PRIVATE src src/res)
 target_link_libraries(LiteView PRIVATE LiteViewCore liteview_options
-    comctl32 shlwapi ole32 shell32 uuid uxtheme)
+    comctl32 shlwapi ole32 shell32 uuid uxtheme msimg32)
 
 if(MSVC)
     # The manifest is embedded by LiteView.rc.
