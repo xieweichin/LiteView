@@ -40,6 +40,37 @@ BEGIN
     END
 END
 
+// ---- Context menu (file list and viewer) -------------------------------------
+IDR_CONTEXTMENU MENU
+BEGIN
+    POPUP "context"
+    BEGIN
+        MENUITEM "看圖(&V)\tEnter",              IDM_NAV_TOGGLE_MODE
+        MENUITEM SEPARATOR
+        MENUITEM "複製到(&C)...",                IDM_EDIT_COPY_TO
+        MENUITEM "移動到(&M)...",                IDM_EDIT_MOVE_TO
+        MENUITEM "刪除(&D)\tDelete",             IDM_EDIT_DELETE
+        MENUITEM "改名(&R)\tF2",                 IDM_EDIT_RENAME
+        MENUITEM SEPARATOR
+        MENUITEM "向左旋轉(&L)\tCtrl+[",         IDM_ROTATE_LEFT
+        MENUITEM "向右旋轉(&T)\tCtrl+]",         IDM_ROTATE_RIGHT
+        MENUITEM SEPARATOR
+        MENUITEM "圖片資訊(&I)\tAlt+Enter",      IDM_FILE_PROPERTIES
+    END
+END
+
+// ---- Picture information dialog --------------------------------------------
+IDD_PROPERTIES DIALOGEX 0, 0, 260, 200
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "圖片資訊"
+FONT 9, "MS Shell Dlg", 0, 0, 0x1
+BEGIN
+    CONTROL         "", IDC_PROPERTIES_LIST, "SysListView32",
+                    LVS_REPORT | LVS_NOSORTHEADER | LVS_SINGLESEL | WS_BORDER | WS_TABSTOP,
+                    7, 7, 246, 164
+    DEFPUSHBUTTON   "確定", IDOK, 203, 178, 50, 14
+END
+
 // ---- Menu -------------------------------------------------------------------
 IDR_MAINMENU MENU
 BEGIN
@@ -170,6 +201,29 @@ BEGIN
     IDS_VIEWER_INDEX        "%u / %u"
     IDS_VIEWER_ZOOM         "%u%"
     IDS_VIEWER_LOADING      "載入中…"
+
+    IDS_NEW_FOLDER          "新增資料夾"
+    IDS_PICK_COPY_TARGET    "複製到哪個資料夾"
+    IDS_PICK_MOVE_TARGET    "移動到哪個資料夾"
+    IDS_ERR_RENAME          "無法改名：%s"
+    IDS_ERR_INVALID_NAME    "檔名不能空白，也不能有 \\ / : * ? "" < > | 這些字元。"
+    IDS_ERR_ROTATE          "有 %u 個檔案無法旋轉（GIF、ICO 等格式不支援，或檔案唯讀）。"
+    IDS_ERR_FILE_OP         "檔案操作失敗：%s"
+    IDS_STATUS_ROTATING     "正在旋轉，還有 %u 個"
+    IDS_PROP_FIELD          "項目"
+    IDS_PROP_VALUE          "內容"
+    IDS_PROP_NAME           "檔名"
+    IDS_PROP_FOLDER         "資料夾"
+    IDS_PROP_SIZE           "檔案大小"
+    IDS_PROP_DIMENSIONS     "尺寸"
+    IDS_PROP_MODIFIED       "修改日期"
+    IDS_PROP_TAKEN          "拍攝日期"
+    IDS_PROP_CAMERA         "相機"
+    IDS_PROP_EXPOSURE       "快門"
+    IDS_PROP_APERTURE       "光圈"
+    IDS_PROP_ISO            "ISO"
+    IDS_PROP_FOCAL          "焦距"
+    IDS_PROP_TITLE          "圖片資訊 - %s"
 
     // Toolbar tooltips (string ID = command ID)
     IDM_NAV_PARENT_FOLDER   "上層資料夾 (Backspace)"

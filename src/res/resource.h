@@ -3,6 +3,9 @@
 
 #define IDI_APP                     100
 #define IDR_MAINMENU                101
+#define IDR_CONTEXTMENU             102
+#define IDD_PROPERTIES              110
+#define IDC_PROPERTIES_LIST         1001
 
 // ---- String table -----------------------------------------------------------
 #define IDS_APP_TITLE               1000
@@ -29,5 +32,29 @@
 #define IDS_VIEWER_INDEX            1201
 #define IDS_VIEWER_ZOOM             1202
 #define IDS_VIEWER_LOADING          1203
+
+// File management (T7)
+#define IDS_NEW_FOLDER              1300
+#define IDS_PICK_COPY_TARGET        1301
+#define IDS_PICK_MOVE_TARGET        1302
+#define IDS_ERR_RENAME              1303
+#define IDS_ERR_INVALID_NAME        1304
+#define IDS_ERR_ROTATE              1305
+#define IDS_ERR_FILE_OP             1306
+#define IDS_STATUS_ROTATING         1307
+#define IDS_PROP_FIELD              1310
+#define IDS_PROP_VALUE              1311
+#define IDS_PROP_NAME               1312
+#define IDS_PROP_FOLDER             1313
+#define IDS_PROP_SIZE               1314
+#define IDS_PROP_DIMENSIONS         1315
+#define IDS_PROP_MODIFIED           1316
+#define IDS_PROP_TAKEN              1317
+#define IDS_PROP_CAMERA             1318
+#define IDS_PROP_EXPOSURE           1319
+#define IDS_PROP_APERTURE           1320
+#define IDS_PROP_ISO                1321
+#define IDS_PROP_FOCAL              1322
+#define IDS_PROP_TITLE              1323
 
 // Toolbar tooltips use the command ID as the string ID.

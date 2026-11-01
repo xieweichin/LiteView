@@ -9,16 +9,20 @@
 
 #include <algorithm>
 #include <climits>
+#include <cwchar>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <new>
 
+#include "core/FileOps.h"
+#include "core/Rotator.h"
 #include "core/Settings.h"
 #include "core/ThreadPool.h"
 #include "res/resource.h"
 #include "ui/Commands.h"
 #include "ui/Messages.h"
+#include "ui/PropertiesDialog.h"
 
 namespace {
 
@@ -107,6 +111,12 @@ std::wstring Format(const std::wstring& pattern, const std::wstring& arg) {
     return text;
 }
 
+std::wstring HexResult(HRESULT hr) {
+    wchar_t text[16] = {};
+    swprintf(text, 16, L"0x%08lX", static_cast<unsigned long>(hr));
+    return text;
+}
+
 std::wstring Format(const std::wstring& pattern, std::size_t value) {
     std::wstring text = pattern;
     const auto at = text.find(L"%u");
@@ -131,6 +141,24 @@ struct MainWindow::SettingsState {
     HRESULT writeResult = S_OK;
 };
 
+struct MainWindow::RotateState {
+    std::mutex mutex;
+    HWND hwnd = nullptr;
+    struct Result {
+        std::wstring path;
+        ThumbnailRequest thumbnail;  // as listed before the rotation
+        HRESULT result;
+    };
+    std::vector<Result> done;
+};
+
+namespace {
+struct WorkerCom {
+    HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    ~WorkerCom() { if (SUCCEEDED(result)) CoUninitialize(); }
+};
+}  // namespace
+
 MainWindow::MainWindow()
     : pool_(std::make_shared<ThreadPool>(ThreadPool::DefaultThreadCount())),
       model_(std::make_unique<FolderModel>(pool_)),
@@ -146,6 +174,12 @@ MainWindow::~MainWindow() {
         settingsState_->changed.notify_one();
     }
     if (settingsThread_.joinable()) settingsThread_.join();
+    // Finish the file being rotated, drop the rest.
+    if (rotateState_) {
+        std::lock_guard<std::mutex> lock(rotateState_->mutex);
+        rotateState_->hwnd = nullptr;
+    }
+    if (rotatePool_) rotatePool_->Shutdown();
     // Stop folder loads and thumbnail work before the pool goes away.
     list_.reset();
     thumbnails_.reset();
@@ -279,6 +313,15 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_APP_THUMB_READY:
         if (list_) list_->OnThumbnailReady(static_cast<std::uint32_t>(wParam), static_cast<std::uint32_t>(lParam));
         return 0;
+    case WM_APP_ROTATED:
+        OnRotated();
+        return 0;
+    case WM_CONTEXTMENU:
+        if (reinterpret_cast<HWND>(wParam) == list_->Hwnd() || reinterpret_cast<HWND>(wParam) == viewer_.Hwnd()) {
+            ShowContextMenu(POINT{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+            return 0;
+        }
+        break;
     case WM_APP_VIEWER_READY:
         RefreshViewerImage();
         return 0;
@@ -376,6 +419,10 @@ bool MainWindow::OnCreate() {
     callbacks.viewChanged = [this] { UpdateViewerStatus(); };
     if (FAILED(viewer_.Create(hwnd_, instance_, std::move(callbacks)))) return false;
     menu_ = GetMenu(hwnd_);
+    list_->SetRenameCallback([this](int index, const std::wstring& name) { return RenameItem(index, name); });
+    rotateState_ = std::make_shared<RotateState>();
+    rotateState_->hwnd = hwnd_;
+    rotatePool_ = std::make_unique<ThreadPool>(1);  // one file at a time, in order
 
     tree_.SetNavigateCallback([this](const std::wstring& path) { Navigate(path); });
     list_->SetColumnClickCallback([this](SortKey key) { OnSortCommand(key); });
@@ -628,6 +675,30 @@ void MainWindow::OnCommand(UINT id) {
     }
     case IDM_NAV_PARENT_FOLDER:
         if (mode_ == Mode::Browser) NavigateToParent();
+        break;
+    case IDM_FILE_NEW_FOLDER:
+        NewFolder();
+        break;
+    case IDM_FILE_PROPERTIES:
+        ShowProperties();
+        break;
+    case IDM_EDIT_COPY_TO:
+        CopyOrMoveSelection(false);
+        break;
+    case IDM_EDIT_MOVE_TO:
+        CopyOrMoveSelection(true);
+        break;
+    case IDM_EDIT_DELETE:
+        DeleteSelection();
+        break;
+    case IDM_EDIT_RENAME:
+        RenameSelection();
+        break;
+    case IDM_ROTATE_LEFT:
+        RotateSelection(false);
+        break;
+    case IDM_ROTATE_RIGHT:
+        RotateSelection(true);
         break;
     case IDM_NAV_TOGGLE_MODE:
         if (mode_ == Mode::Viewer) {
@@ -1097,14 +1168,22 @@ void MainWindow::OnFolderLoaded(std::uint32_t generation) {
     pendingSelect_.clear();
     list_->Reset(saved, generation);
     if (mode_ == Mode::Viewer) {
-        // The viewed picture moved (re-sort) or vanished (refresh).
-        const int index = ViewerIndex();
+        // Item ids are new after a reload: find the viewed picture by path.
+        const int index = FindIndexByPath(viewerPath_);
         if (index < 0) {
             ExitViewer();
         } else {
+            const bool changed = model_->At(static_cast<std::size_t>(index)).id != viewerItemId_;
+            viewerItemId_ = model_->At(static_cast<std::size_t>(index)).id;
+            if (changed) ShowViewerIndex(index, viewerDirection_);
             UpdateViewerStatus();
         }
         return;
+    }
+    if (selectIndexAfterLoad_ >= 0) {
+        const int count = static_cast<int>(model_->Count());
+        if (count > 0) list_->SelectOnly(std::min(selectIndexAfterLoad_, count - 1));
+        selectIndexAfterLoad_ = -1;
     }
     SetStatusText(0, listFolder_);
     UpdateStatus();
@@ -1347,4 +1426,267 @@ void MainWindow::StopSlideshow() {
     if (!slideshow_) return;
     slideshow_ = false;
     KillTimer(hwnd_, kSlideshowTimer);
+}
+
+// ---- File management --------------------------------------------------------
+
+std::wstring MainWindow::PickFolder(UINT titleId) const {
+    std::wstring result;
+    IFileOpenDialog* dialog = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) {
+        return result;
+    }
+    DWORD options = 0;
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+    const std::wstring title = LoadStr(titleId);
+    if (!title.empty()) dialog->SetTitle(title.c_str());
+    IShellItem* current = nullptr;
+    if (!listFolder_.empty() &&
+        SUCCEEDED(SHCreateItemFromParsingName(listFolder_.c_str(), nullptr, IID_PPV_ARGS(&current)))) {
+        dialog->SetFolder(current);
+        current->Release();
+    }
+    IShellItem* picked = nullptr;
+    if (SUCCEEDED(dialog->Show(hwnd_)) && SUCCEEDED(dialog->GetResult(&picked))) {
+        PWSTR path = nullptr;
+        if (SUCCEEDED(picked->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) result = path;
+        CoTaskMemFree(path);
+        picked->Release();
+    }
+    dialog->Release();
+    return result;
+}
+
+std::vector<std::wstring> MainWindow::TargetPaths() const {
+    std::vector<std::wstring> paths;
+    if (mode_ == Mode::Viewer) {
+        if (!viewerPath_.empty()) paths.push_back(viewerPath_);
+        return paths;
+    }
+    for (int index : list_->SelectedIndices()) paths.push_back(model_->FullPath(static_cast<std::size_t>(index)));
+    return paths;
+}
+
+int MainWindow::FindIndexByPath(const std::wstring& path) const {
+    const std::size_t count = model_->Count();
+    for (std::size_t i = 0; i < count; ++i) {
+        if (SamePath(model_->FullPath(i), path)) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+void MainWindow::ShowError(UINT id, const std::wstring& detail) {
+    MessageBoxW(hwnd_, Format(LoadStr(id), detail).c_str(), LoadStr(IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
+}
+
+void MainWindow::AfterRemovingViewed(int index) {
+    // The viewer moves on to the next picture (or the previous one at the end).
+    const int count = static_cast<int>(model_->Count());
+    int next = index + 1 < count ? index + 1 : index - 1;
+    if (next < 0 || next == index) {
+        ExitViewer();
+        Refresh();
+        return;
+    }
+    viewerPath_ = model_->FullPath(static_cast<std::size_t>(next));
+    viewerDirection_ = next > index ? 1 : -1;
+    Refresh();  // OnFolderLoaded shows viewerPath_ once the list is reloaded
+}
+
+void MainWindow::CopyOrMoveSelection(bool move) {
+    StopSlideshow();
+    const std::vector<std::wstring> paths = TargetPaths();
+    if (paths.empty()) return;
+    const std::wstring target = PickFolder(move ? IDS_PICK_MOVE_TARGET : IDS_PICK_COPY_TARGET);
+    if (target.empty()) return;
+    const int first = mode_ == Mode::Viewer ? ViewerIndex() : (list_->SelectedIndices().empty() ? -1 : list_->SelectedIndices().front());
+    const HRESULT hr = FileOps::CopyOrMove(hwnd_, paths, target, move);
+    if (FAILED(hr)) {
+        ShowError(IDS_ERR_FILE_OP, HexResult(hr));
+        return;
+    }
+    tree_.Refresh(target);
+    if (!move) return;
+    for (const auto& path : paths) viewerCache_->Invalidate(path);
+    if (mode_ == Mode::Viewer) {
+        AfterRemovingViewed(first);
+    } else {
+        selectIndexAfterLoad_ = first;
+        Refresh();
+    }
+}
+
+void MainWindow::DeleteSelection() {
+    StopSlideshow();
+    if (mode_ == Mode::Browser && GetFocus() == tree_.Hwnd()) return;  // folders are not deleted from here
+    const std::vector<std::wstring> paths = TargetPaths();
+    if (paths.empty()) return;
+    const int first = mode_ == Mode::Viewer ? ViewerIndex() : list_->SelectedIndices().front();
+    const HRESULT hr = FileOps::Recycle(hwnd_, paths);
+    if (hr == S_FALSE) return;  // cancelled
+    if (FAILED(hr)) {
+        ShowError(IDS_ERR_FILE_OP, HexResult(hr));
+        return;
+    }
+    for (const auto& path : paths) viewerCache_->Invalidate(path);
+    if (mode_ == Mode::Viewer) {
+        AfterRemovingViewed(first);
+    } else {
+        selectIndexAfterLoad_ = first;
+        Refresh();
+    }
+}
+
+void MainWindow::RenameSelection() {
+    StopSlideshow();
+    if (mode_ == Mode::Browser && GetFocus() == tree_.Hwnd()) {
+        if (HTREEITEM item = TreeView_GetSelection(tree_.Hwnd())) TreeView_EditLabel(tree_.Hwnd(), item);
+        return;
+    }
+    int index = mode_ == Mode::Viewer ? ViewerIndex() : list_->FocusedIndex();
+    if (index < 0) return;
+    if (mode_ == Mode::Viewer) ExitViewer();  // rename happens in the list
+    list_->BeginRename(index);
+}
+
+bool MainWindow::RenameItem(int index, const std::wstring& newName) {
+    if (index < 0 || static_cast<std::size_t>(index) >= model_->Count()) return false;
+    std::wstring name = newName;
+    while (!name.empty() && name.front() == L' ') name.erase(name.begin());
+    const std::wstring& oldName = model_->At(static_cast<std::size_t>(index)).name;
+    if (name == oldName) return false;
+    // Typing over the whole name drops the extension; keep it so the
+    // picture stays a picture.
+    const auto oldDot = oldName.find_last_of(L'.');
+    if (name.find(L'.') == std::wstring::npos && oldDot != std::wstring::npos && oldDot > 0) {
+        name += oldName.substr(oldDot);
+    }
+    if (!FileOps::IsValidFileName(name)) {
+        MessageBoxW(hwnd_, LoadStr(IDS_ERR_INVALID_NAME).c_str(), LoadStr(IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    const std::wstring from = model_->FullPath(static_cast<std::size_t>(index));
+    const std::wstring to = (listFolder_.back() == L'\\' ? listFolder_ : listFolder_ + L'\\') + name;
+    const HRESULT hr = FileOps::Rename(from, to);
+    if (FAILED(hr)) {
+        ShowError(IDS_ERR_RENAME, name);
+        return false;
+    }
+    viewerCache_->Invalidate(from);
+    Navigate(listFolder_, name);  // reload and keep the renamed file selected
+    return true;
+}
+
+void MainWindow::NewFolder() {
+    if (listFolder_.empty()) return;
+    if (mode_ == Mode::Viewer) ExitViewer();
+    const std::wstring name = FileOps::UniqueChildName(listFolder_, LoadStr(IDS_NEW_FOLDER));
+    const std::wstring path = (listFolder_.back() == L'\\' ? listFolder_ : listFolder_ + L'\\') + name;
+    if (!CreateDirectoryW(path.c_str(), nullptr)) {
+        ShowError(IDS_ERR_FILE_OP, name);
+        return;
+    }
+    // Show it in the folder tree with its name ready to edit.
+    tree_.EditChildWhenListed(listFolder_, name);
+}
+
+void MainWindow::RotateSelection(bool clockwise) {
+    StopSlideshow();
+    std::vector<int> indices;
+    if (mode_ == Mode::Viewer) {
+        const int index = ViewerIndex();
+        if (index >= 0) indices.push_back(index);
+        viewer_.RotatePending(clockwise);  // turn on screen right away
+    } else {
+        indices = list_->SelectedIndices();
+    }
+    for (int index : indices) {
+        RotateState::Result job{model_->FullPath(static_cast<std::size_t>(index)), list_->MakeThumbnailRequest(index), E_PENDING};
+        const auto state = rotateState_;
+        const HRESULT submitted = rotatePool_->Submit([state, job, clockwise]() mutable {
+            thread_local WorkerCom com;
+            job.result = Rotator::RotateFile(job.path, clockwise);
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->done.push_back(std::move(job));
+            if (state->hwnd) PostMessageW(state->hwnd, WM_APP_ROTATED, 0, 0);
+        });
+        if (SUCCEEDED(submitted)) ++rotationsPending_;
+    }
+    if (rotationsPending_ > 0 && mode_ == Mode::Browser) {
+        SetStatusText(0, Format(LoadStr(IDS_STATUS_ROTATING), rotationsPending_));
+    }
+}
+
+void MainWindow::OnRotated() {
+    std::vector<RotateState::Result> done;
+    {
+        std::lock_guard<std::mutex> lock(rotateState_->mutex);
+        done.swap(rotateState_->done);
+    }
+    for (const auto& job : done) {
+        if (rotationsPending_ > 0) --rotationsPending_;
+        if (FAILED(job.result)) {
+            ++rotationFailures_;
+            continue;
+        }
+        thumbnails_->Invalidate(job.thumbnail);
+        viewerCache_->Invalidate(job.path);
+        if (mode_ == Mode::Viewer && SamePath(job.path, viewerPath_)) {
+            viewerCache_->Request(viewerPath_, ScreenSide(), true);
+        }
+        if (SamePath(job.path, viewerPath_) || mode_ == Mode::Browser) {
+            // The preview pane shows the rotated picture after the reload.
+            preview_.Show(std::wstring());
+        }
+    }
+    if (mode_ == Mode::Browser && rotationsPending_ > 0) {
+        SetStatusText(0, Format(LoadStr(IDS_STATUS_ROTATING), rotationsPending_));
+    }
+    if (rotationsPending_ == 0) {
+        if (rotationFailures_ > 0) {
+            MessageBoxW(hwnd_, Format(LoadStr(IDS_ERR_ROTATE), rotationFailures_).c_str(), LoadStr(IDS_APP_TITLE).c_str(),
+                        MB_OK | MB_ICONWARNING);
+            rotationFailures_ = 0;
+            if (mode_ == Mode::Viewer) viewer_.SetImage(viewerPath_, viewerCache_->GetAny(viewerPath_), nullptr, false);
+        }
+        // Sizes (and thumbnails) changed: reload, keeping the selection.
+        Refresh();
+    }
+}
+
+void MainWindow::ShowProperties() {
+    const int index = mode_ == Mode::Viewer ? ViewerIndex() : list_->FocusedIndex();
+    if (index < 0) return;
+    ShowPropertiesDialog(hwnd_, instance_, model_->FullPath(static_cast<std::size_t>(index)));
+}
+
+void MainWindow::ShowContextMenu(POINT screen) {
+    if (mode_ == Mode::Browser) {
+        if (list_->SelectedIndices().empty()) return;
+        if (screen.x == -1 && screen.y == -1) {
+            // Keyboard (Shift+F10): open at the focused item.
+            RECT rc{};
+            const int focused = list_->FocusedIndex();
+            if (focused >= 0 && ListView_GetItemRect(list_->Hwnd(), focused, &rc, LVIR_ICON)) {
+                screen = POINT{rc.left + (rc.right - rc.left) / 2, rc.top + (rc.bottom - rc.top) / 2};
+                ClientToScreen(list_->Hwnd(), &screen);
+            } else {
+                GetCursorPos(&screen);
+            }
+        }
+    } else if (screen.x == -1 && screen.y == -1) {
+        GetCursorPos(&screen);
+    }
+    HMENU menu = LoadMenuW(instance_, MAKEINTRESOURCEW(IDR_CONTEXTMENU));
+    if (!menu) return;
+    HMENU popup = GetSubMenu(menu, 0);
+    if (mode_ == Mode::Browser) SetMenuDefaultItem(popup, IDM_NAV_TOGGLE_MODE, FALSE);
+    if (mode_ == Mode::Viewer) {
+        DeleteMenu(popup, IDM_NAV_TOGGLE_MODE, MF_BYCOMMAND);
+        DeleteMenu(popup, 0, MF_BYPOSITION);  // the separator that followed it
+    }
+    const UINT command = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, 0, hwnd_, nullptr);
+    DestroyMenu(menu);
+    if (command) OnCommand(command);
 }
