@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <wrl/client.h>
 
 #include <functional>
 #include <string>
@@ -62,8 +63,8 @@ private:
     HWND hwnd_ = nullptr;
     HWND surface_ = nullptr;  // MFPlay draws the video here
     Callbacks callbacks_;
-    IMFPMediaPlayer* player_ = nullptr;
-    Callback* callback_ = nullptr;
+    Microsoft::WRL::ComPtr<IMFPMediaPlayer> player_;
+    Microsoft::WRL::ComPtr<Callback> callback_;
     std::wstring path_;
     State state_ = State::Empty;
     long long duration_ = 0;

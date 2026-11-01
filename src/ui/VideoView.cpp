@@ -26,6 +26,54 @@ std::wstring LoadStr(UINT id) {
     return length > 0 ? std::wstring(text, static_cast<std::size_t>(length)) : std::wstring();
 }
 
+// Owns one GDI object and deletes it.
+class GdiObject {
+public:
+    explicit GdiObject(HGDIOBJ object) : object_(object) {}
+    ~GdiObject() { if (object_) DeleteObject(object_); }
+    GdiObject(const GdiObject&) = delete;
+    GdiObject& operator=(const GdiObject&) = delete;
+    HGDIOBJ Get() const { return object_; }
+    HBRUSH Brush() const { return static_cast<HBRUSH>(object_); }
+
+private:
+    HGDIOBJ object_;
+};
+
+// A memory DC with a bitmap selected, restored and freed on exit.
+class MemoryDc {
+public:
+    MemoryDc(HDC target, int width, int height)
+        : dc_(CreateCompatibleDC(target)), bitmap_(CreateCompatibleBitmap(target, width, height)) {
+        if (dc_ && bitmap_.Get()) old_ = SelectObject(dc_, bitmap_.Get());
+    }
+    ~MemoryDc() {
+        if (dc_ && old_) SelectObject(dc_, old_);
+        if (dc_) DeleteDC(dc_);
+    }
+    MemoryDc(const MemoryDc&) = delete;
+    MemoryDc& operator=(const MemoryDc&) = delete;
+    HDC Get() const { return old_ ? dc_ : nullptr; }
+
+private:
+    HDC dc_;
+    GdiObject bitmap_;
+    HGDIOBJ old_ = nullptr;
+};
+
+// Selects an object into a DC for one scope.
+class Selected {
+public:
+    Selected(HDC dc, HGDIOBJ object) : dc_(dc), old_(SelectObject(dc, object)) {}
+    ~Selected() { SelectObject(dc_, old_); }
+    Selected(const Selected&) = delete;
+    Selected& operator=(const Selected&) = delete;
+
+private:
+    HDC dc_;
+    HGDIOBJ old_;
+};
+
 bool IsCodecError(HRESULT hr) {
     return hr == MF_E_TOPO_CODEC_NOT_FOUND || hr == MF_E_UNSUPPORTED_BYTESTREAM_TYPE ||
            hr == MF_E_INVALIDMEDIATYPE || hr == MF_E_UNSUPPORTED_FORMAT || hr == MF_E_TOPO_UNSUPPORTED;
@@ -286,77 +334,76 @@ void VideoView::PaintBar(HDC target) {
     RECT area{0, rc.bottom - bar, rc.right, rc.bottom};
     if (area.right <= 0 || bar <= 0) return;
     // Draw off-screen to avoid flicker on each tick.
-    HDC dc = CreateCompatibleDC(target);
-    HBITMAP bitmap = CreateCompatibleBitmap(target, area.right, bar);
-    HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
+    MemoryDc memory(target, area.right, bar);
+    HDC dc = memory.Get();
+    if (!dc) return;
     SetViewportOrgEx(dc, 0, -area.top, nullptr);
 
     const auto& palette = theme::Current();
     const COLORREF back = fullscreen_ ? RGB(0, 0, 0) : palette.surface;
     const COLORREF fore = fullscreen_ ? RGB(220, 220, 220) : palette.text;
-    HBRUSH backBrush = CreateSolidBrush(back);
-    FillRect(dc, &area, backBrush);
-    DeleteObject(backBrush);
+    {
+        GdiObject backBrush(CreateSolidBrush(back));
+        FillRect(dc, &area, backBrush.Brush());
+    }
 
     // Play / pause glyph.
     const RECT button = ButtonRect();
     const int cx = (button.left + button.right) / 2, cy = (button.top + button.bottom) / 2;
     const int s = bar / 5;
-    HBRUSH foreBrush = CreateSolidBrush(fore);
-    HGDIOBJ oldBrush = SelectObject(dc, foreBrush);
-    HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
-    if (state_ == State::Playing) {
-        RECT left{cx - s, cy - s, cx - s / 3, cy + s};
-        RECT right{cx + s / 3, cy - s, cx + s, cy + s};
-        FillRect(dc, &left, foreBrush);
-        FillRect(dc, &right, foreBrush);
-    } else {
-        const POINT triangle[3] = {{cx - s * 2 / 3, cy - s}, {cx - s * 2 / 3, cy + s}, {cx + s, cy}};
-        Polygon(dc, triangle, 3);
+    {
+        GdiObject foreBrush(CreateSolidBrush(fore));
+        Selected brush(dc, foreBrush.Get());
+        Selected pen(dc, GetStockObject(NULL_PEN));
+        if (state_ == State::Playing) {
+            RECT left{cx - s, cy - s, cx - s / 3, cy + s};
+            RECT right{cx + s / 3, cy - s, cx + s, cy + s};
+            FillRect(dc, &left, foreBrush.Brush());
+            FillRect(dc, &right, foreBrush.Brush());
+        } else {
+            const POINT triangle[3] = {{cx - s * 2 / 3, cy - s}, {cx - s * 2 / 3, cy + s}, {cx + s, cy}};
+            Polygon(dc, triangle, 3);
+        }
     }
 
     // Track and progress.
     const RECT track = TrackRect();
     const long long position = Position();
-    HBRUSH trackBrush = CreateSolidBrush(fullscreen_ ? RGB(80, 80, 80) : palette.border);
-    FillRect(dc, &track, trackBrush);
-    DeleteObject(trackBrush);
+    {
+        GdiObject trackBrush(CreateSolidBrush(fullscreen_ ? RGB(80, 80, 80) : palette.border));
+        FillRect(dc, &track, trackBrush.Brush());
+    }
     if (duration_ > 0) {
         RECT done = track;
         done.right = track.left + static_cast<LONG>((track.right - track.left) *
                                                     std::clamp(static_cast<double>(position) / static_cast<double>(duration_), 0.0, 1.0));
-        HBRUSH accent = CreateSolidBrush(palette.accent);
-        FillRect(dc, &done, accent);
-        DeleteObject(accent);
+        GdiObject accent(CreateSolidBrush(palette.accent));
+        FillRect(dc, &done, accent.Brush());
     }
-    SelectObject(dc, oldPen);
-    SelectObject(dc, oldBrush);
-    DeleteObject(foreBrush);
 
     // Time.
     const std::wstring time = FormatMediaTime(position) + L" / " + FormatMediaTime(duration_);
     RECT text{track.right + bar / 4, area.top, area.right - bar / 4, area.bottom};
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, fore);
-    HGDIOBJ oldFont = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
-    DrawTextW(dc, time.c_str(), -1, &text, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-    SelectObject(dc, oldFont);
+    {
+        Selected font(dc, GetStockObject(DEFAULT_GUI_FONT));
+        DrawTextW(dc, time.c_str(), -1, &text, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
 
     SetViewportOrgEx(dc, 0, 0, nullptr);
     BitBlt(target, 0, area.top, area.right, bar, dc, 0, 0, SRCCOPY);
-    SelectObject(dc, oldBitmap);
-    DeleteObject(bitmap);
-    DeleteDC(dc);
 }
 
 void VideoView::Show(const std::wstring& path) {
     Clear();
     path_ = path;
-    callback_ = new Callback(this);
+    callback_.Attach(new Callback(this));
     SetState(State::Loading);
-    const HRESULT hr = MFPCreateMediaPlayer(path.c_str(), TRUE, MFP_OPTION_NONE, callback_, surface_, &player_);
+    const HRESULT hr = MFPCreateMediaPlayer(path.c_str(), TRUE, MFP_OPTION_NONE, callback_.Get(), surface_,
+                                            player_.ReleaseAndGetAddressOf());
     if (FAILED(hr)) {
-        player_ = nullptr;
+        player_.Reset();
         SetState(IsCodecError(hr) ? State::NoCodec : State::Failed);
         return;
     }
@@ -373,10 +420,9 @@ void VideoView::OnPlayerEvent(MFP_EVENT_HEADER* header) {
     switch (header->eEventType) {
     case MFP_EVENT_TYPE_MEDIAITEM_SET: {
         BOOL hasVideo = FALSE, selected = FALSE;
-        IMFPMediaItem* item = nullptr;
-        if (SUCCEEDED(player_->GetMediaItem(&item)) && item) {
+        Microsoft::WRL::ComPtr<IMFPMediaItem> item;
+        if (SUCCEEDED(player_->GetMediaItem(item.GetAddressOf())) && item) {
             if (SUCCEEDED(item->HasVideo(&hasVideo, &selected))) hasVideo_ = hasVideo && selected;
-            item->Release();
         }
         PROPVARIANT value;
         PropVariantInit(&value);
@@ -451,18 +497,13 @@ void VideoView::SeekTo(long long position) {
 
 void VideoView::Clear() {
     if (hwnd_) KillTimer(hwnd_, kTickTimer);
-    if (callback_) {
-        callback_->Detach();
-    }
+    // Detach first so a late event cannot reach this view, then shut down.
+    if (callback_) callback_->Detach();
     if (player_) {
         player_->Shutdown();
-        player_->Release();
-        player_ = nullptr;
+        player_.Reset();
     }
-    if (callback_) {
-        callback_->Release();
-        callback_ = nullptr;
-    }
+    callback_.Reset();
     path_.clear();
     duration_ = 0;
     hasVideo_ = false;
