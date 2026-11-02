@@ -89,7 +89,7 @@ Nov 1, 2026 · @偉欽
   資料夾裡有這些格式但還沒裝擴充時，狀態列會顯示「有 N 個 … 檔案需要安裝 Windows 擴充」，按一下直接開 Store 安裝頁；「說明 → 取得更多圖片格式」可檢查整台電腦缺哪些。HEIC 另需 HEVC 視訊延伸模組，打不開時檢視畫面會提示。
 - **文字檔**：txt、md、log、csv、json、xml、yaml、ini 與常見程式碼。瀏覽模式的預覽窗格顯示開頭幾行；按 Enter 進入檢視模式，用等寬字型唯讀顯示（自動換行，可選取複製，+/- 調整字級），編碼自動判斷 UTF-8／UTF-16／系統 ANSI（繁中 Windows 為 Big5），超過 8 MB 只顯示開頭。PageUp/PageDown/空白鍵在文字頁用來捲動，換檔用滑鼠或命令列按鈕。
 - **PDF**：由 Windows 內建的 Windows.Data.Pdf 繪製，不內嵌 PDF 引擎。縮圖、預覽窗格顯示第一頁；檢視模式可縮放，Ctrl+PageDown／Ctrl+PageUp 換頁，狀態列顯示「第 N / M 頁」。有密碼的 PDF 不支援。
-- **Office 文件**：Word、Excel、PowerPoint、OpenDocument、RTF、XPS 等。借用 Windows 的「預覽處理常式」（檔案總管預覽窗格同一套），有安裝 Office 或對應軟體才看得到；縮圖與預覽窗格用系統縮圖，檢視模式顯示完整文件。沒有預覽程式時顯示說明文字。啟動預覽程式可能要一兩秒。
+- **Office 文件**：Word、Excel、PowerPoint、OpenDocument、RTF、XPS 等。借用 Windows 的「預覽處理常式」（檔案總管預覽窗格同一套），有安裝 Office 或對應軟體才看得到；縮圖用系統縮圖；預覽窗格和檢視模式都直接顯示文件內容（和檔案總管的預覽窗格一樣，可捲動）。沒有預覽程式時顯示說明文字。啟動預覽程式可能要一兩秒。
 - **向量圖**：SVG 由 Direct2D 繪製（Windows 10 1703 以上），EMF／WMF 由 GDI+ 繪製，放大時重新繪製保持清晰；AI（PDF 相容格式）走 PDF 路線；EPS 走系統預覽處理常式，需另裝對應軟體。
 - **3D 模型**：STL（二進位與文字）、OBJ、glTF／GLB（glTF 2.0）、3MF。程式自帶小型軟體繪圖（不需顯示卡驅動），縮圖與預覽窗格顯示斜上方視角；檢視模式是轉盤檢視：載入後慢慢自轉，滑鼠拖曳旋轉、上下鍵調仰角、Ctrl+滾輪或 +/- 縮放、/ 或滑鼠中鍵重設，Ctrl+[ ／ Ctrl+] 每次轉 15 度。只讀幾何與單色材質（glTF 基本色、3MF 顏色），貼圖、Draco 壓縮等擴充不支援；超過 1,000 萬個三角形不開啟，太重的模型不自轉。
 - **影片**：MP4、M4V、MOV、AVI、WMV、ASF、MKV、WebM、MPEG、M2TS／MTS、3GP。縮圖與預覽窗格用系統縮圖；檢視模式用 Windows 內建的 Media Foundation 播放（自動開始），底部有播放鍵、進度條與時間：空白鍵播放／暫停，←／→ 快轉倒轉 5 秒，點畫面播放／暫停，點進度條跳到該處；PageUp/PageDown 或滾輪換檔。HEVC、AV1、VP9 等格式需要 Windows 視訊延伸模組，缺少時畫面會提示，按一下開啟 Microsoft Store。

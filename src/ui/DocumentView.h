@@ -32,6 +32,9 @@ public:
     void Clear();
     void SetFullscreen(bool fullscreen);
     void OnThemeChanged();
+    // false: loading a document leaves keyboard focus where it is (the
+    // browser's preview pane, where focus stays in the file list).
+    void SetTakeFocus(bool take) { takeFocus_ = take; }
 
     enum class State { Empty, Loading, Shown, NoHandler, Failed };
     State GetState() const { return state_; }
@@ -57,5 +60,6 @@ private:
     std::wstring path_;
     State state_ = State::Empty;
     HRESULT error_ = S_OK;  // why the last load failed
+    bool takeFocus_ = true;
     bool fullscreen_ = false;
 };

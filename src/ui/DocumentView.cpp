@@ -252,6 +252,7 @@ void DocumentView::Show(const std::wstring& path) {
 void DocumentView::Load() {
     if (state_ != State::Loading || path_.empty()) return;
     UpdateWindow(hwnd_);
+    const HWND focus = GetFocus();
     const std::vector<CLSID> handlers = HandlersFor(path_);
     if (handlers.empty()) {
         state_ = State::NoHandler;
@@ -288,7 +289,9 @@ void DocumentView::Load() {
         state_ = State::Failed;
     } else {
         state_ = State::Shown;
-        SetFocus(hwnd_);  // the handler may have taken it
+        // The handler may have taken the focus; give it back.
+        if (takeFocus_) SetFocus(hwnd_);
+        else if (focus && IsWindow(focus)) SetFocus(focus);
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
     if (callbacks_.changed) callbacks_.changed();

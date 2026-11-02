@@ -6,10 +6,12 @@
 #include <mutex>
 #include <string>
 
+#include "ui/DocumentView.h"
+
 class ThreadPool;
 
-// Right-hand preview of the selected file (pictures, PDF, vector, 3D, and the
-// shell's thumbnail for Office documents and videos), fitted into the pane and
+// Right-hand preview of the selected file (pictures, PDF, vector, 3D, Office
+// documents through their preview handler, and the shell's thumbnail for videos), fitted into the pane and
 // centred, never enlarged; a text file shows its first lines. With nothing
 // to show, a short hint is drawn instead. Decoding runs on its own background thread;
 // only the latest request is kept.
@@ -58,4 +60,9 @@ private:
     SIZE decodedFor_{};  // pane size of the last decode
     std::shared_ptr<Shared> shared_;
     std::unique_ptr<ThreadPool> pool_;
+    // Office documents are shown live by their preview handler, like
+    // Explorer's preview pane; this child covers the pane while one is shown.
+    DocumentView documents_;
+    std::wstring documentPath_;
+    void ShowDocument(bool show);
 };
