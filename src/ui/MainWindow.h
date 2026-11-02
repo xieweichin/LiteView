@@ -49,13 +49,14 @@ private:
     struct BrowserSettings {
         std::wstring lastFolder;  // validated by the settings worker
         int leftWidth = 260;      // 96-DPI pixels
-        int treeHeight = 320;     // 96-DPI pixels
+        int previewWidth = 360;   // 96-DPI pixels, right-hand preview pane
+        bool showPreview = true;
         int viewMode = static_cast<int>(FileListView::ViewMode::Details);
         int sortKey = static_cast<int>(SortKey::Name);
         bool sortAscending = true;
         int slideshowSeconds = 3;
     };
-    enum class Splitter { None, Vertical, Horizontal };
+    enum class Splitter { None, Left, Right };  // tree | list | preview
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK PathBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
@@ -185,7 +186,9 @@ private:
     bool sortAscending_ = true;
     bool statusPending_ = false;
     int leftWidth96_ = 260;
-    int treeHeight96_ = 320;
+    int previewWidth96_ = 360;
+    bool showPreview_ = true;
+    void SetPreviewVisible(bool visible);
     Splitter dragging_ = Splitter::None;
     int dragOffset_ = 0;
     RECT content_{};  // area between path bar and status bar

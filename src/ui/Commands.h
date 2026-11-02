@@ -27,6 +27,7 @@
 #define IDM_VIEW_LARGE_ICONS        40202
 #define IDM_VIEW_LIST               40203
 #define IDM_VIEW_DETAILS            40204
+#define IDM_VIEW_PREVIEW_PANE       40205 // Alt+P（右側預覽窗格）
 #define IDM_SORT_NAME               40211
 #define IDM_SORT_SIZE               40212
 #define IDM_SORT_TYPE               40213

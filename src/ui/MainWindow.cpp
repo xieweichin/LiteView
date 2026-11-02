@@ -628,6 +628,10 @@ void MainWindow::CreateMenus() {
             GetMenuStringW(moreMenu_, id, text, ARRAYSIZE(text), MF_BYCOMMAND);
             AppendMenuW(viewMenu_, MF_STRING, id, text);
         }
+        wchar_t text[64] = {};
+        GetMenuStringW(moreMenu_, IDM_VIEW_PREVIEW_PANE, text, ARRAYSIZE(text), MF_BYCOMMAND);
+        AppendMenuW(viewMenu_, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(viewMenu_, MF_STRING, IDM_VIEW_PREVIEW_PANE, text);
     }
 }
 
@@ -873,16 +877,22 @@ void MainWindow::Layout() {
     const int width = content_.right - content_.left;
     const int height = content_.bottom - content_.top;
     const int minPane = Scale(kMinPane, dpi_);
+    // Folder tree on the left, file list in the middle, preview on the right
+    // (like Explorer's preview pane). The list keeps at least minPane.
     int left = Scale(leftWidth96_, dpi_);
     left = std::min(left, width - splitter - minPane);
     left = std::max(left, std::min(minPane, width / 2));
-    int tree = Scale(treeHeight96_, dpi_);
-    tree = std::min(tree, height - splitter - minPane / 2);
-    tree = std::max(tree, std::min(minPane, height / 2));
+    int preview = 0;
+    if (showPreview_) {
+        preview = Scale(previewWidth96_, dpi_);
+        preview = std::min(preview, width - left - 2 * splitter - minPane);
+        preview = std::max(preview, std::min(minPane, (width - left) / 2));
+    }
+    const int listWidth = width - left - splitter - (showPreview_ ? preview + splitter : 0);
 
-    place(tree_.Hwnd(), 0, content_.top, left, tree);
-    place(preview_.Hwnd(), 0, content_.top + tree + splitter, left, height - tree - splitter);
-    place(list_->Hwnd(), left + splitter, content_.top, width - left - splitter, height);
+    place(tree_.Hwnd(), 0, content_.top, left, height);
+    place(list_->Hwnd(), left + splitter, content_.top, listWidth, height);
+    if (showPreview_) place(preview_.Hwnd(), width - preview, content_.top, preview, height);
     if (dwp) EndDeferWindowPos(dwp);
     InvalidateRect(hwnd_, nullptr, FALSE);  // field, hairline and status line
 }
@@ -893,9 +903,12 @@ MainWindow::Splitter MainWindow::HitTestSplitter(POINT pt) const {
     RECT treeRect{};
     GetWindowRect(tree_.Hwnd(), &treeRect);
     MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&treeRect), 2);
-    if (pt.x >= treeRect.right && pt.x < treeRect.right + splitter) return Splitter::Vertical;
-    if (pt.x < treeRect.right && pt.y >= treeRect.bottom && pt.y < treeRect.bottom + splitter) {
-        return Splitter::Horizontal;
+    if (pt.x >= treeRect.right && pt.x < treeRect.right + splitter) return Splitter::Left;
+    if (showPreview_) {
+        RECT previewRect{};
+        GetWindowRect(preview_.Hwnd(), &previewRect);
+        MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&previewRect), 2);
+        if (pt.x >= previewRect.left - splitter && pt.x < previewRect.left) return Splitter::Right;
     }
     return Splitter::None;
 }
@@ -910,7 +923,7 @@ bool MainWindow::OnSetCursor() {
         SetCursor(LoadCursorW(nullptr, IDC_HAND));
         return true;
     }
-    SetCursor(LoadCursorW(nullptr, hit == Splitter::Vertical ? IDC_SIZEWE : IDC_SIZENS));
+    SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
     return true;
 }
 
@@ -921,21 +934,21 @@ void MainWindow::OnLButtonDown(POINT pt) {
     }
     dragging_ = HitTestSplitter(pt);
     if (dragging_ == Splitter::None) return;
-    RECT treeRect{};
-    GetWindowRect(tree_.Hwnd(), &treeRect);
-    MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&treeRect), 2);
-    dragOffset_ = dragging_ == Splitter::Vertical ? pt.x - treeRect.right : pt.y - treeRect.bottom;
+    RECT rect{};
+    GetWindowRect(dragging_ == Splitter::Left ? tree_.Hwnd() : preview_.Hwnd(), &rect);
+    MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&rect), 2);
+    dragOffset_ = dragging_ == Splitter::Left ? pt.x - rect.right : pt.x - rect.left;
     SetCapture(hwnd_);
 }
 
 void MainWindow::OnMouseMove(POINT pt) {
     if (dragging_ == Splitter::None || GetCapture() != hwnd_) return;
-    if (dragging_ == Splitter::Vertical) {
+    if (dragging_ == Splitter::Left) {
         leftWidth96_ = MulDiv(std::max(0, static_cast<int>(pt.x) - dragOffset_), USER_DEFAULT_SCREEN_DPI,
                               static_cast<int>(dpi_));
     } else {
-        treeHeight96_ = MulDiv(std::max(0, static_cast<int>(pt.y - content_.top) - dragOffset_),
-                               USER_DEFAULT_SCREEN_DPI, static_cast<int>(dpi_));
+        previewWidth96_ = MulDiv(std::max(0, static_cast<int>(content_.right - pt.x) + dragOffset_),
+                                 USER_DEFAULT_SCREEN_DPI, static_cast<int>(dpi_));
     }
     Layout();
 }
@@ -949,11 +962,26 @@ void MainWindow::OnLButtonUp() {
     RECT treeRect{};
     GetWindowRect(tree_.Hwnd(), &treeRect);
     leftWidth96_ = MulDiv(treeRect.right - treeRect.left, USER_DEFAULT_SCREEN_DPI, static_cast<int>(dpi_));
-    treeHeight96_ = MulDiv(treeRect.bottom - treeRect.top, USER_DEFAULT_SCREEN_DPI, static_cast<int>(dpi_));
+    if (showPreview_) {
+        RECT previewRect{};
+        GetWindowRect(preview_.Hwnd(), &previewRect);
+        previewWidth96_ = MulDiv(previewRect.right - previewRect.left, USER_DEFAULT_SCREEN_DPI, static_cast<int>(dpi_));
+    }
+}
+
+void MainWindow::SetPreviewVisible(bool visible) {
+    if (visible == showPreview_) return;
+    showPreview_ = visible;
+    if (mode_ == Mode::Browser) ShowWindow(preview_.Hwnd(), visible ? SW_SHOW : SW_HIDE);
+    Layout();
+    UpdatePreview();  // hidden: drops the picture; shown: previews the selection
 }
 
 void MainWindow::OnCommand(UINT id) {
     switch (id) {
+    case IDM_VIEW_PREVIEW_PANE:
+        if (mode_ == Mode::Browser) SetPreviewVisible(!showPreview_);
+        break;
     case IDM_FILE_EXIT:
         PostMessageW(hwnd_, WM_CLOSE, 0, 0);
         break;
@@ -1139,6 +1167,8 @@ void MainWindow::OnInitMenuPopup(HMENU menu) {
                                : slideshowSeconds_ <= 5 ? IDM_SLIDESHOW_5S
                                                         : IDM_SLIDESHOW_10S;
     CheckMenuRadioItem(menu, IDM_SLIDESHOW_2S, IDM_SLIDESHOW_10S, slideshowItem, MF_BYCOMMAND);
+    CheckMenuItem(menu, IDM_VIEW_PREVIEW_PANE, MF_BYCOMMAND | (showPreview_ ? MF_CHECKED : MF_UNCHECKED));
+    EnableMenuItem(menu, IDM_VIEW_PREVIEW_PANE, MF_BYCOMMAND | (mode_ == Mode::Browser ? MF_ENABLED : MF_GRAYED));
     CheckMenuItem(menu, IDM_VIEW_FULLSCREEN, MF_BYCOMMAND | (fullscreen_ ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(menu, IDM_VIEW_SLIDESHOW, MF_BYCOMMAND | (slideshow_ ? MF_CHECKED : MF_UNCHECKED));
     const UINT browserOnly = mode_ == Mode::Browser ? MF_ENABLED : MF_GRAYED;
@@ -1230,10 +1260,11 @@ void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noe
             value <= 10000) {
             browser.leftWidth = value;
         }
-        if (SUCCEEDED(settings.ReadInt(L"Browser", L"TreeHeight", defaults.treeHeight, value)) && value >= 0 &&
+        if (SUCCEEDED(settings.ReadInt(L"Browser", L"PreviewWidth", defaults.previewWidth, value)) && value >= 0 &&
             value <= 10000) {
-            browser.treeHeight = value;
+            browser.previewWidth = value;
         }
+        if (SUCCEEDED(settings.ReadBool(L"Browser", L"ShowPreview", true, flag))) browser.showPreview = flag;
         if (SUCCEEDED(settings.ReadInt(L"Browser", L"ViewMode", defaults.viewMode, value)) && value >= 0 &&
             value <= static_cast<int>(FileListView::ViewMode::Details)) {
             browser.viewMode = value;
@@ -1286,7 +1317,8 @@ void MainWindow::SettingsWorker(const std::shared_ptr<SettingsState>& state) noe
             writeResult = settings.WriteString(L"Browser", L"LastFolder", finalBrowser.lastFolder);
         }
         if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"LeftWidth", finalBrowser.leftWidth);
-        if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"TreeHeight", finalBrowser.treeHeight);
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"PreviewWidth", finalBrowser.previewWidth);
+        if (SUCCEEDED(writeResult)) writeResult = settings.WriteBool(L"Browser", L"ShowPreview", finalBrowser.showPreview);
         if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"ViewMode", finalBrowser.viewMode);
         if (SUCCEEDED(writeResult)) writeResult = settings.WriteInt(L"Browser", L"SortKey", finalBrowser.sortKey);
         if (SUCCEEDED(writeResult)) {
@@ -1374,7 +1406,8 @@ void MainWindow::OnClose() {
         if (browserStarted_) {
             if (!listFolder_.empty()) browser.lastFolder = listFolder_;
             browser.leftWidth = leftWidth96_;
-            browser.treeHeight = treeHeight96_;
+            browser.previewWidth = previewWidth96_;
+            browser.showPreview = showPreview_;
             browser.viewMode = static_cast<int>(list_->GetViewMode());
             browser.sortKey = static_cast<int>(sortKey_);
             browser.sortAscending = sortAscending_;
@@ -1406,7 +1439,9 @@ void MainWindow::InitBrowser(const BrowserSettings& settings) {
     if (browserStarted_) return;
     browserStarted_ = true;
     leftWidth96_ = settings.leftWidth;
-    treeHeight96_ = settings.treeHeight;
+    previewWidth96_ = settings.previewWidth;
+    showPreview_ = settings.showPreview;
+    if (!showPreview_) ShowWindow(preview_.Hwnd(), SW_HIDE);
     sortKey_ = static_cast<SortKey>(settings.sortKey);
     sortAscending_ = settings.sortAscending;
     slideshowSeconds_ = settings.slideshowSeconds;
@@ -1583,7 +1618,7 @@ void MainWindow::UpdatePreview() {
     // Preview the focused picture while it is selected.
     const int focused = list_->FocusedIndex();
     std::wstring path;
-    if (focused >= 0 && ListView_GetItemState(list_->Hwnd(), focused, LVIS_SELECTED)) {
+    if (showPreview_ && focused >= 0 && ListView_GetItemState(list_->Hwnd(), focused, LVIS_SELECTED)) {
         path = model_->FullPath(static_cast<std::size_t>(focused));
     }
     preview_.Show(path);
@@ -1710,7 +1745,7 @@ void MainWindow::ExitViewer() {
     ShowWindow(navBar_.Hwnd(), SW_SHOW);
     ShowWindow(pathBar_, SW_SHOW);
     ShowWindow(tree_.Hwnd(), SW_SHOW);
-    ShowWindow(preview_.Hwnd(), SW_SHOW);
+    if (showPreview_) ShowWindow(preview_.Hwnd(), SW_SHOW);
     ShowWindow(list_->Hwnd(), SW_SHOW);
     Layout();
     // Land on the picture that was being viewed.

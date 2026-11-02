@@ -14,8 +14,8 @@ IDI_APP ICON "LiteView.ico"
 
 // ---- Version ----------------------------------------------------------------
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,3,0,0
- PRODUCTVERSION 0,3,0,0
+ FILEVERSION 0,4,0,0
+ PRODUCTVERSION 0,4,0,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -27,11 +27,11 @@ BEGIN
         BLOCK "040404b0"
         BEGIN
             VALUE "FileDescription", "LiteView 看圖程式"
-            VALUE "FileVersion", "0.3.0"
+            VALUE "FileVersion", "0.4.0"
             VALUE "InternalName", "LiteView"
             VALUE "OriginalFilename", "LiteView.exe"
             VALUE "ProductName", "LiteView"
-            VALUE "ProductVersion", "0.3.0"
+            VALUE "ProductVersion", "0.4.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -124,6 +124,8 @@ BEGIN
         MENUITEM "清單(&L)",                     IDM_VIEW_LIST
         MENUITEM "詳細資料(&D)",                 IDM_VIEW_DETAILS
         MENUITEM SEPARATOR
+        MENUITEM "預覽窗格(&W)\tAlt+P",         IDM_VIEW_PREVIEW_PANE
+        MENUITEM SEPARATOR
         POPUP "排序方式(&S)"
         BEGIN
             MENUITEM "名稱(&N)",                 IDM_SORT_NAME
@@ -167,6 +169,7 @@ BEGIN
     VK_RETURN,  IDM_FILE_PROPERTIES,        VIRTKEY, ALT, NOINVERT
     VK_BACK,    IDM_NAV_PARENT_FOLDER,      VIRTKEY, NOINVERT
     VK_F5,      IDM_VIEW_REFRESH,           VIRTKEY, NOINVERT
+    "P",        IDM_VIEW_PREVIEW_PANE,      VIRTKEY, ALT, NOINVERT
     VK_F2,      IDM_EDIT_RENAME,            VIRTKEY, NOINVERT
     VK_F2,      IDM_EDIT_BATCH_RENAME,      VIRTKEY, CONTROL, NOINVERT
     VK_DELETE,  IDM_EDIT_DELETE,            VIRTKEY, NOINVERT
@@ -206,7 +209,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_APP_TITLE           "LiteView"
-    IDS_ABOUT_TEXT          "LiteView 0.3.0\n輕巧快速的看圖程式。"
+    IDS_ABOUT_TEXT          "LiteView 0.4.0\n輕巧快速的看圖程式。"
     IDS_STATUS_READY        "就緒"
     IDS_NOT_IMPLEMENTED     "這個功能還沒做好。"
     IDS_ERR_STARTUP         "LiteView 無法啟動（錯誤碼 %s）。"
@@ -248,6 +251,8 @@ BEGIN
     IDS_VIDEO_PLAYING       "播放中（空白鍵暫停，←／→ 快轉 5 秒）"
     IDS_VIDEO_PAUSED        "已暫停（空白鍵播放）"
     IDS_VIDEO_ENDED         "播放完畢"
+    IDS_PREVIEW_EMPTY       "選取要預覽的檔案。"
+    IDS_PREVIEW_NONE        "沒有可用的預覽。"
     IDS_TEXT_TRUNCATED      "（檔案太大，只顯示前 8 MB）"
 
     IDS_NEW_FOLDER          "新增資料夾"
