@@ -46,6 +46,9 @@ public:
     enum class State { Empty, Loading, Shown, NoHandler, Failed };
     State GetState() const { return state_; }
     HRESULT Error() const { return error_; }  // when Failed
+    // Which call failed (1 create, 2 memory stream, 3 file stream, 4 path,
+    // 5 shell item, 6 SetWindow, 7 DoPreview); 0 when not known.
+    int ErrorStep() const { return errorStep_; }
 
 private:
 
@@ -68,6 +71,7 @@ private:
     std::wstring path_;
     State state_ = State::Empty;
     HRESULT error_ = S_OK;  // why the last load failed
+    int errorStep_ = 0;
     bool takeFocus_ = true;
     bool fullscreen_ = false;
 };

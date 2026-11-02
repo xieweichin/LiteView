@@ -73,84 +73,240 @@ std::vector<CLSID> HandlersFor(const std::wstring& path) {
     return handlers;
 }
 
-// The file's contents for a stream-based handler (Office's are). Files up to
-// kMemoryStreamBytes are read into memory so that the preview does not keep
-// the file open: an open file cannot be renamed, moved or deleted.
+// Where a load failed, shown after the error code so that a report from a
+// user's PC says which call refused.
+enum Step : int {
+    kStepCreate = 1,        // CoCreateInstance
+    kStepMemoryStream = 2,  // IInitializeWithStream with the in-memory copy
+    kStepFileStream = 3,    // IInitializeWithStream with a stream on the file
+    kStepFile = 4,          // IInitializeWithFile
+    kStepItem = 5,          // IInitializeWithItem
+    kStepWindow = 6,        // SetWindow
+    kStepPreview = 7,       // DoPreview
+};
+
+// A read-only in-memory copy of the file. Unlike SHCreateMemStream's stream it
+// answers Stat with the file's name and size: Office's handlers read the name
+// to tell a .docx from a .xlsx and fail with E_NOTIMPL without it.
+class FileCopyStream final : public IStream {
+public:
+    static HRESULT Create(const std::wstring& path, ComPtr<IStream>& stream);
+
+    IFACEMETHODIMP QueryInterface(REFIID riid, void** object) override {
+        if (!object) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IStream || riid == IID_ISequentialStream) {
+            *object = static_cast<IStream*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    IFACEMETHODIMP_(ULONG) AddRef() override { return static_cast<ULONG>(InterlockedIncrement(&refs_)); }
+    IFACEMETHODIMP_(ULONG) Release() override {
+        const LONG refs = InterlockedDecrement(&refs_);
+        if (refs == 0) delete this;
+        return static_cast<ULONG>(refs);
+    }
+
+    IFACEMETHODIMP Read(void* buffer, ULONG count, ULONG* read) override {
+        if (!buffer && count) return STG_E_INVALIDPOINTER;
+        const std::size_t size = data_->size();
+        const std::size_t available = position_ < size ? size - static_cast<std::size_t>(position_) : 0;
+        const ULONG n = static_cast<ULONG>(std::min<std::size_t>(available, count));
+        if (n) memcpy(buffer, data_->data() + position_, n);
+        position_ += n;
+        if (read) *read = n;
+        return n < count ? S_FALSE : S_OK;
+    }
+    IFACEMETHODIMP Write(const void*, ULONG, ULONG* written) override {
+        if (written) *written = 0;
+        return STG_E_ACCESSDENIED;
+    }
+    IFACEMETHODIMP Seek(LARGE_INTEGER move, DWORD origin, ULARGE_INTEGER* position) override {
+        LONGLONG base = 0;
+        switch (origin) {
+        case STREAM_SEEK_SET: base = 0; break;
+        case STREAM_SEEK_CUR: base = static_cast<LONGLONG>(position_); break;
+        case STREAM_SEEK_END: base = static_cast<LONGLONG>(data_->size()); break;
+        default: return STG_E_INVALIDFUNCTION;
+        }
+        const LONGLONG target = base + move.QuadPart;
+        if (target < 0) return STG_E_INVALIDFUNCTION;
+        position_ = static_cast<ULONGLONG>(target);
+        if (position) position->QuadPart = position_;
+        return S_OK;
+    }
+    IFACEMETHODIMP SetSize(ULARGE_INTEGER) override { return STG_E_ACCESSDENIED; }
+    IFACEMETHODIMP CopyTo(IStream* target, ULARGE_INTEGER count, ULARGE_INTEGER* read,
+                          ULARGE_INTEGER* written) override {
+        if (!target) return STG_E_INVALIDPOINTER;
+        const std::size_t size = data_->size();
+        const ULONGLONG available = position_ < size ? size - position_ : 0;
+        ULONGLONG left = std::min<ULONGLONG>(available, count.QuadPart);
+        ULONGLONG total = 0;
+        HRESULT hr = S_OK;
+        while (left && SUCCEEDED(hr)) {
+            const ULONG chunk = static_cast<ULONG>(std::min<ULONGLONG>(left, 1u << 20));
+            ULONG done = 0;
+            hr = target->Write(data_->data() + position_, chunk, &done);
+            position_ += done;
+            total += done;
+            left -= done;
+            if (!done) break;
+        }
+        if (read) read->QuadPart = total;
+        if (written) written->QuadPart = total;
+        return hr;
+    }
+    IFACEMETHODIMP Commit(DWORD) override { return S_OK; }
+    IFACEMETHODIMP Revert() override { return S_OK; }
+    IFACEMETHODIMP LockRegion(ULARGE_INTEGER, ULARGE_INTEGER, DWORD) override { return STG_E_INVALIDFUNCTION; }
+    IFACEMETHODIMP UnlockRegion(ULARGE_INTEGER, ULARGE_INTEGER, DWORD) override { return STG_E_INVALIDFUNCTION; }
+    IFACEMETHODIMP Stat(STATSTG* stat, DWORD flags) override {
+        if (!stat) return STG_E_INVALIDPOINTER;
+        *stat = {};
+        stat->type = STGTY_STREAM;
+        stat->cbSize.QuadPart = data_->size();
+        stat->mtime = modified_;
+        stat->ctime = created_;
+        stat->atime = accessed_;
+        stat->grfMode = STGM_READ | STGM_SHARE_DENY_NONE;
+        stat->clsid = CLSID_NULL;
+        if (!(flags & STATFLAG_NONAME)) {
+            const std::size_t bytes = (name_.size() + 1) * sizeof(wchar_t);
+            stat->pwcsName = static_cast<LPOLESTR>(CoTaskMemAlloc(bytes));
+            if (!stat->pwcsName) return STG_E_INSUFFICIENTMEMORY;
+            memcpy(stat->pwcsName, name_.c_str(), bytes);
+        }
+        return S_OK;
+    }
+    IFACEMETHODIMP Clone(IStream** clone) override {
+        if (!clone) return STG_E_INVALIDPOINTER;
+        auto* copy = new (std::nothrow) FileCopyStream(*this);
+        if (!copy) return E_OUTOFMEMORY;
+        *clone = copy;
+        return S_OK;
+    }
+
+private:
+    FileCopyStream() = default;
+    FileCopyStream(const FileCopyStream& other)
+        : data_(other.data_), position_(other.position_), name_(other.name_), created_(other.created_),
+          accessed_(other.accessed_), modified_(other.modified_) {}
+    ~FileCopyStream() = default;
+
+    LONG refs_ = 1;
+    std::shared_ptr<const std::vector<BYTE>> data_;
+    ULONGLONG position_ = 0;
+    std::wstring name_;
+    FILETIME created_{};
+    FILETIME accessed_{};
+    FILETIME modified_{};
+};
+
+// Files up to this size are copied into memory so that the preview does not
+// keep the file open: an open file cannot be renamed, moved or deleted.
 constexpr ULONGLONG kMemoryStreamBytes = 256ull * 1024 * 1024;
 
-HRESULT OpenStream(const std::wstring& path, ComPtr<IStream>& stream) {
+HRESULT FileCopyStream::Create(const std::wstring& path, ComPtr<IStream>& stream) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                               nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (file == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(GetLastError());
-    LARGE_INTEGER size{};
-    HRESULT hr = GetFileSizeEx(file, &size) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
-    if (SUCCEEDED(hr) && static_cast<ULONGLONG>(size.QuadPart) <= kMemoryStreamBytes) {
-        std::vector<BYTE> data;
+    BY_HANDLE_FILE_INFORMATION info{};
+    HRESULT hr = GetFileInformationByHandle(file, &info) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    const ULONGLONG size = (static_cast<ULONGLONG>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+    if (SUCCEEDED(hr) && size > kMemoryStreamBytes) hr = E_OUTOFMEMORY;
+    auto data = std::make_shared<std::vector<BYTE>>();
+    if (SUCCEEDED(hr)) {
         try {
-            data.resize(static_cast<std::size_t>(size.QuadPart));
+            data->resize(static_cast<std::size_t>(size));
         } catch (...) {
             hr = E_OUTOFMEMORY;
         }
-        std::size_t done = 0;
-        while (SUCCEEDED(hr) && done < data.size()) {
-            DWORD read = 0;
-            const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(data.size() - done, 16u * 1024 * 1024));
-            if (!ReadFile(file, data.data() + done, chunk, &read, nullptr)) hr = HRESULT_FROM_WIN32(GetLastError());
-            else if (read == 0) break;
-            done += read;
-        }
-        CloseHandle(file);
-        if (FAILED(hr)) return hr;
-        IStream* memory = SHCreateMemStream(data.empty() ? nullptr : data.data(), static_cast<UINT>(done));
-        if (!memory) return E_OUTOFMEMORY;
-        stream.Attach(memory);
-        return S_OK;
+    }
+    std::size_t done = 0;
+    while (SUCCEEDED(hr) && done < data->size()) {
+        DWORD read = 0;
+        const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(data->size() - done, 16u * 1024 * 1024));
+        if (!ReadFile(file, data->data() + done, chunk, &read, nullptr)) hr = HRESULT_FROM_WIN32(GetLastError());
+        else if (read == 0) break;
+        done += read;
     }
     CloseHandle(file);
     if (FAILED(hr)) return hr;
-    return SHCreateStreamOnFileEx(path.c_str(), STGM_READ | STGM_SHARE_DENY_NONE, FILE_ATTRIBUTE_NORMAL, FALSE,
-                                  nullptr, stream.GetAddressOf());
+    data->resize(done);
+    auto* copy = new (std::nothrow) FileCopyStream();
+    if (!copy) return E_OUTOFMEMORY;
+    copy->data_ = std::move(data);
+    copy->name_ = PathFindFileNameW(path.c_str());
+    copy->created_ = info.ftCreationTime;
+    copy->accessed_ = info.ftLastAccessTime;
+    copy->modified_ = info.ftLastWriteTime;
+    stream.Attach(copy);
+    return S_OK;
 }
 
-// Creates the handler and gives it the file. Handlers support one or more of
-// the three initialisation interfaces, and some refuse one they also
-// implement (Office's handlers prefer a stream), so each is tried on a fresh
-// instance until one accepts.
-HRESULT CreateHandler(const CLSID& clsid, const std::wstring& path, ComPtr<IPreviewHandler>& handler,
-                      ComPtr<IStream>& stream) {
-    HRESULT last = E_NOINTERFACE;
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        ComPtr<IPreviewHandler> candidate;
-        // Handlers normally run isolated in a surrogate process (prevhost.exe).
-        HRESULT hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(candidate.GetAddressOf()));
-        if (FAILED(hr))
-            hr = CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(candidate.GetAddressOf()));
-        if (FAILED(hr)) return hr;
-        ComPtr<IStream> candidateStream;
-        if (attempt == 0) {
-            ComPtr<IInitializeWithStream> withStream;
-            if (FAILED(candidate.As(&withStream))) continue;
-            hr = OpenStream(path, candidateStream);
-            if (SUCCEEDED(hr)) hr = withStream->Initialize(candidateStream.Get(), STGM_READ);
-        } else if (attempt == 1) {
-            ComPtr<IInitializeWithFile> withFile;
-            if (FAILED(candidate.As(&withFile))) continue;
-            hr = withFile->Initialize(path.c_str(), STGM_READ);
-        } else {
-            ComPtr<IInitializeWithItem> withItem;
-            if (FAILED(candidate.As(&withItem))) continue;
-            ComPtr<IShellItem> item;
-            hr = SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(item.GetAddressOf()));
-            if (SUCCEEDED(hr)) hr = withItem->Initialize(item.Get(), STGM_READ);
+// A failure and the step it happened at; the deepest step is the most telling.
+struct Failure {
+    HRESULT hr = E_FAIL;
+    int step = 0;
+    void Note(HRESULT result, int at) {
+        if (at >= step) {
+            hr = result;
+            step = at;
         }
-        if (SUCCEEDED(hr)) {
-            handler = candidate;
-            stream = candidateStream;
-            return S_OK;
-        }
-        last = hr;
     }
-    return last;
+};
+
+// Creates the handler and gives it the file in the way `step` names.
+// Handlers support one or more of the initialisation interfaces and some
+// refuse one they also implement, so the caller tries each on a fresh
+// instance: the in-memory copy first, then a stream on the file itself, the
+// path and the shell item. E_NOINTERFACE: the handler lacks that interface.
+HRESULT CreateHandler(const CLSID& clsid, const std::wstring& path, int step, ComPtr<IPreviewHandler>& handler,
+                      ComPtr<IStream>& stream, Failure& failure, bool& cannotStart) {
+    cannotStart = false;
+    ComPtr<IPreviewHandler> candidate;
+    // Handlers normally run isolated in a surrogate process (prevhost.exe).
+    HRESULT hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(candidate.GetAddressOf()));
+    if (FAILED(hr))
+        hr = CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(candidate.GetAddressOf()));
+    if (FAILED(hr)) {
+        failure.Note(hr, kStepCreate);
+        cannotStart = true;
+        return hr;
+    }
+    ComPtr<IStream> candidateStream;
+    if (step == kStepMemoryStream || step == kStepFileStream) {
+        ComPtr<IInitializeWithStream> withStream;
+        if (FAILED(candidate.As(&withStream))) return E_NOINTERFACE;
+        if (step == kStepMemoryStream) {
+            hr = FileCopyStream::Create(path, candidateStream);
+            if (FAILED(hr)) return E_NOINTERFACE;  // too large: the file stream follows
+        } else {
+            hr = SHCreateStreamOnFileEx(path.c_str(), STGM_READ | STGM_SHARE_DENY_NONE, FILE_ATTRIBUTE_NORMAL, FALSE,
+                                        nullptr, candidateStream.GetAddressOf());
+        }
+        if (SUCCEEDED(hr)) hr = withStream->Initialize(candidateStream.Get(), STGM_READ);
+    } else if (step == kStepFile) {
+        ComPtr<IInitializeWithFile> withFile;
+        if (FAILED(candidate.As(&withFile))) return E_NOINTERFACE;
+        hr = withFile->Initialize(path.c_str(), STGM_READ);
+    } else {
+        ComPtr<IInitializeWithItem> withItem;
+        if (FAILED(candidate.As(&withItem))) return E_NOINTERFACE;
+        ComPtr<IShellItem> item;
+        hr = SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(item.GetAddressOf()));
+        if (SUCCEEDED(hr)) hr = withItem->Initialize(item.Get(), STGM_READ);
+    }
+    if (FAILED(hr)) {
+        failure.Note(hr, step);
+        return hr;
+    }
+    handler = candidate;
+    stream = candidateStream;
+    return S_OK;
 }
 
 std::wstring LoadStr(UINT id) {
@@ -202,6 +358,7 @@ struct DocumentHost {
     RECT rect{};
     COLORREF background = 0;
     COLORREF text = 0;
+    int failedStep = 0;  // where the last failed load stopped (see Step)
 
     bool Current(unsigned g) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -365,34 +522,48 @@ private:
             Report(generation, S_FALSE);
             return;
         }
-        // Try each registered handler until one shows the file.
+        // Try each registered handler, and each way of giving it the file,
+        // until one shows it.
+        Failure failure;
         HRESULT hr = E_FAIL;
         for (const CLSID& clsid : handlers) {
-            if (!host_->Current(generation)) return;  // a newer request is queued
-            ComPtr<IPreviewHandler> handler;
-            ComPtr<IStream> stream;
-            hr = CreateHandler(clsid, path, handler, stream);
-            if (FAILED(hr)) continue;
-            ComPtr<IObjectWithSite> site;
-            if (frame_ && SUCCEEDED(handler.As(&site))) site->SetSite(frame_.Get());
-            RECT rect;
-            {
-                std::lock_guard<std::mutex> lock(host_->mutex);
-                rect = host_->rect;
+            for (int step = kStepMemoryStream; step <= kStepItem; ++step) {
+                if (!host_->Current(generation)) return;  // a newer request is queued
+                ComPtr<IPreviewHandler> handler;
+                ComPtr<IStream> stream;
+                bool cannotStart = false;
+                hr = CreateHandler(clsid, path, step, handler, stream, failure, cannotStart);
+                if (cannotStart) break;
+                if (FAILED(hr)) continue;
+                ComPtr<IObjectWithSite> site;
+                if (frame_ && SUCCEEDED(handler.As(&site))) site->SetSite(frame_.Get());
+                RECT rect;
+                {
+                    std::lock_guard<std::mutex> lock(host_->mutex);
+                    rect = host_->rect;
+                }
+                hr = handler->SetWindow(owner, &rect);
+                if (FAILED(hr)) {
+                    failure.Note(hr, kStepWindow);
+                    if (site) site->SetSite(nullptr);
+                    continue;
+                }
+                handler_ = handler;
+                stream_ = stream;
+                Colors();
+                hr = handler->DoPreview();
+                if (SUCCEEDED(hr)) break;
+                failure.Note(hr, kStepPreview);
+                Unload();
             }
-            hr = handler->SetWindow(owner, &rect);
-            if (FAILED(hr)) {
-                if (site) site->SetSite(nullptr);
-                continue;
-            }
-            handler_ = handler;
-            stream_ = stream;
-            Colors();
-            hr = handler->DoPreview();
             if (SUCCEEDED(hr)) break;
-            Unload();
         }
-        if (FAILED(hr)) Unload();
+        if (FAILED(hr)) {
+            Unload();
+            hr = failure.step ? failure.hr : hr;
+            std::lock_guard<std::mutex> lock(host_->mutex);
+            host_->failedStep = failure.step;
+        }
         if (!host_->Current(generation)) {
             Unload();
             return;
@@ -586,10 +757,12 @@ void DocumentView::Show(const std::wstring& path) {
         if (!host_->Post(kHostLoad, generation_, 0)) {
             state_ = State::Failed;
             error_ = E_FAIL;
+            errorStep_ = 0;
         }
     } else {
         state_ = State::Failed;
         error_ = E_OUTOFMEMORY;
+        errorStep_ = 0;
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
     if (callbacks_.changed) callbacks_.changed();
@@ -602,6 +775,10 @@ void DocumentView::OnLoaded(unsigned generation, HRESULT hr) {
     } else if (FAILED(hr)) {
         state_ = State::Failed;
         error_ = hr;
+        {
+            std::lock_guard<std::mutex> lock(host_->mutex);
+            errorStep_ = host_->failedStep;
+        }
     } else {
         state_ = State::Shown;
         // The handler may have taken the focus; give it back.
@@ -687,8 +864,8 @@ void DocumentView::OnPaint() {
         std::wstring text = LoadStr(message);
         if (state_ == State::Failed) {
             // The code helps tell a missing component from a damaged file.
-            wchar_t code[16] = {};
-            swprintf(code, 16, L"0x%08lX", static_cast<unsigned long>(error_));
+            wchar_t code[32] = {};
+            swprintf(code, 32, L"0x%08lX #%d", static_cast<unsigned long>(error_), errorStep_);
             const auto at = text.find(L"%s");
             if (at != std::wstring::npos) text.replace(at, 2, code);
         }
