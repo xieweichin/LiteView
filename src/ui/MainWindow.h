@@ -116,6 +116,10 @@ private:
     int FindIndexByPath(const std::wstring& path) const;
     void CopyOrMoveSelection(bool move);
     void DeleteSelection();
+    // Preview handlers may hold the shown document open; these let go of it
+    // around renames, moves and deletes, and show it again if it remains.
+    void ReleaseDocuments();
+    void RestoreDocuments();
     void RenameSelection();
     bool RenameItem(int index, const std::wstring& newName);
     void NewFolder();

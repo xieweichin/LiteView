@@ -116,9 +116,43 @@ HRESULT PreviewPane::Create(HWND parent, HINSTANCE instance) {
     hwnd_ = CreateWindowExW(0, kClassName, nullptr, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0,
                             parent, nullptr, instance, this);
     if (!hwnd_) return HRESULT_FROM_WIN32(GetLastError());
+    if (SUCCEEDED(documents_.Create(hwnd_, instance, nullptr, DocumentView::Callbacks{})))
+        documents_.SetTakeFocus(false);
     std::lock_guard<std::mutex> lock(shared_->mutex);
     shared_->hwnd = hwnd_;
     return S_OK;
+}
+
+void PreviewPane::ShowDocument(bool show) {
+    if (!documents_.Hwnd()) return;
+    if (!show) {
+        if (documentPath_.empty()) return;
+        documentPath_.clear();
+        documentReleased_ = false;
+        documents_.Clear();
+        ShowWindow(documents_.Hwnd(), SW_HIDE);
+        return;
+    }
+    if (documentPath_ == path_ && !documentReleased_) return;
+    documentPath_ = path_;
+    documentReleased_ = false;
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    SetWindowPos(documents_.Hwnd(), HWND_TOP, 0, 0, rc.right, rc.bottom, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    documents_.Show(path_);
+}
+
+void PreviewPane::ReleaseDocument() {
+    if (documentPath_.empty() || documentReleased_) return;
+    documents_.Release();
+    documentReleased_ = true;
+}
+
+void PreviewPane::RestoreDocument() {
+    if (!documentReleased_) return;
+    documentReleased_ = false;
+    if (!documentPath_.empty() && documentPath_ == path_ && GetFileAttributesW(path_.c_str()) != INVALID_FILE_ATTRIBUTES)
+        documents_.Show(path_);
 }
 
 LRESULT CALLBACK PreviewPane::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -152,6 +186,10 @@ LRESULT PreviewPane::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_SIZE: {
         // Re-decode when the pane grows past what the current image was made for.
         const int w = LOWORD(lParam), h = HIWORD(lParam);
+        if (!documentPath_.empty()) {
+            SetWindowPos(documents_.Hwnd(), nullptr, 0, 0, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+            return 0;
+        }
         if (!path_.empty() && (w > decodedFor_.cx || h > decodedFor_.cy)) {
             SetTimer(hwnd_, kDebounceTimer, kDebounceMs * 3, nullptr);
         }
@@ -190,16 +228,24 @@ void PreviewPane::Show(const std::wstring& path) {
         shared_->failed = false;
     }
     pool_->CancelPending();
+    if (path.empty() || !IsDocumentExtension(PathFindExtensionW(path.c_str()))) ShowDocument(false);
     if (path.empty()) {
         KillTimer(hwnd_, kDebounceTimer);
         InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
-    SetTimer(hwnd_, kDebounceTimer, kDebounceMs, nullptr);
+    // Starting a preview handler blocks for a moment; wait a little longer
+    // so moving through a folder with the arrow keys stays smooth.
+    const bool document = IsDocumentExtension(PathFindExtensionW(path.c_str()));
+    SetTimer(hwnd_, kDebounceTimer, document ? kDebounceMs * 3 : kDebounceMs, nullptr);
 }
 
 void PreviewPane::StartDecode() {
     if (path_.empty()) return;
+    if (IsDocumentExtension(PathFindExtensionW(path_.c_str()))) {
+        ShowDocument(true);
+        return;
+    }
     RECT rc{};
     GetClientRect(hwnd_, &rc);
     const UINT margin = 4;

@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <cwchar>
+#include <memory>
+#include <mutex>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -70,6 +73,45 @@ std::vector<CLSID> HandlersFor(const std::wstring& path) {
     return handlers;
 }
 
+// The file's contents for a stream-based handler (Office's are). Files up to
+// kMemoryStreamBytes are read into memory so that the preview does not keep
+// the file open: an open file cannot be renamed, moved or deleted.
+constexpr ULONGLONG kMemoryStreamBytes = 256ull * 1024 * 1024;
+
+HRESULT OpenStream(const std::wstring& path, ComPtr<IStream>& stream) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(GetLastError());
+    LARGE_INTEGER size{};
+    HRESULT hr = GetFileSizeEx(file, &size) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+    if (SUCCEEDED(hr) && static_cast<ULONGLONG>(size.QuadPart) <= kMemoryStreamBytes) {
+        std::vector<BYTE> data;
+        try {
+            data.resize(static_cast<std::size_t>(size.QuadPart));
+        } catch (...) {
+            hr = E_OUTOFMEMORY;
+        }
+        std::size_t done = 0;
+        while (SUCCEEDED(hr) && done < data.size()) {
+            DWORD read = 0;
+            const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(data.size() - done, 16u * 1024 * 1024));
+            if (!ReadFile(file, data.data() + done, chunk, &read, nullptr)) hr = HRESULT_FROM_WIN32(GetLastError());
+            else if (read == 0) break;
+            done += read;
+        }
+        CloseHandle(file);
+        if (FAILED(hr)) return hr;
+        IStream* memory = SHCreateMemStream(data.empty() ? nullptr : data.data(), static_cast<UINT>(done));
+        if (!memory) return E_OUTOFMEMORY;
+        stream.Attach(memory);
+        return S_OK;
+    }
+    CloseHandle(file);
+    if (FAILED(hr)) return hr;
+    return SHCreateStreamOnFileEx(path.c_str(), STGM_READ | STGM_SHARE_DENY_NONE, FILE_ATTRIBUTE_NORMAL, FALSE,
+                                  nullptr, stream.GetAddressOf());
+}
+
 // Creates the handler and gives it the file. Handlers support one or more of
 // the three initialisation interfaces, and some refuse one they also
 // implement (Office's handlers prefer a stream), so each is tried on a fresh
@@ -88,8 +130,7 @@ HRESULT CreateHandler(const CLSID& clsid, const std::wstring& path, ComPtr<IPrev
         if (attempt == 0) {
             ComPtr<IInitializeWithStream> withStream;
             if (FAILED(candidate.As(&withStream))) continue;
-            hr = SHCreateStreamOnFileEx(path.c_str(), STGM_READ | STGM_SHARE_DENY_NONE, FILE_ATTRIBUTE_NORMAL, FALSE,
-                                        nullptr, candidateStream.GetAddressOf());
+            hr = OpenStream(path, candidateStream);
             if (SUCCEEDED(hr)) hr = withStream->Initialize(candidateStream.Get(), STGM_READ);
         } else if (attempt == 1) {
             ComPtr<IInitializeWithFile> withFile;
@@ -118,14 +159,67 @@ std::wstring LoadStr(UINT id) {
     return length > 0 ? std::wstring(text, static_cast<std::size_t>(length)) : std::wstring();
 }
 
+// Messages to the host thread's window.
+constexpr wchar_t kHostClassName[] = L"LiteViewDocumentHost";
+constexpr UINT kHostLoad = WM_APP + 1;    // wParam: generation
+constexpr UINT kHostLayout = WM_APP + 2;  // the rectangle changed
+constexpr UINT kHostColors = WM_APP + 3;  // the colours changed
+constexpr UINT kHostUnload = WM_APP + 4;  // lParam: Signal* to set once unloaded, or null
+constexpr UINT kHostQuit = WM_APP + 5;
+
+// An event that the UI thread may stop waiting for before it is set.
+struct Signal {
+    HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    ~Signal() { if (event) CloseHandle(event); }
+};
+
+// Waits for `handle` while still answering messages sent to this thread
+// (the host forwards keys to the UI thread with SendMessage).
+bool WaitAnsweringSent(HANDLE handle, DWORD timeoutMs) {
+    const ULONGLONG end = GetTickCount64() + timeoutMs;
+    for (;;) {
+        const ULONGLONG now = GetTickCount64();
+        if (now >= end) return false;
+        const DWORD result =
+            MsgWaitForMultipleObjectsEx(1, &handle, static_cast<DWORD>(end - now), QS_SENDMESSAGE, 0);
+        if (result == WAIT_OBJECT_0) return true;
+        if (result != WAIT_OBJECT_0 + 1) return false;
+        MSG msg;
+        PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+    }
+}
+
 }  // namespace
 
+// State shared by the UI thread and the host thread.
+struct DocumentHost {
+    std::mutex mutex;
+    HWND owner = nullptr;   // the DocumentView window; null once it is gone
+    HWND window = nullptr;  // the host thread's message window
+    HACCEL accelerators = nullptr;
+    unsigned generation = 0;  // latest request; older loads are dropped
+    std::wstring path;
+    RECT rect{};
+    COLORREF background = 0;
+    COLORREF text = 0;
+
+    bool Current(unsigned g) {
+        std::lock_guard<std::mutex> lock(mutex);
+        return generation == g;
+    }
+    bool Post(UINT msg, WPARAM wParam, LPARAM lParam) {
+        std::lock_guard<std::mutex> lock(mutex);
+        return window && PostMessageW(window, msg, wParam, lParam);
+    }
+};
+
+namespace {
+
 // The site given to the preview handler: lets keys the handler does not use
-// (Esc, PageDown, Ctrl+F...) reach LiteView's accelerators.
-class DocumentView::Frame final : public IPreviewHandlerFrame {
+// (Esc, PageDown, Ctrl+F...) reach LiteView's accelerators on the UI thread.
+class Frame final : public IPreviewHandlerFrame {
 public:
-    Frame(HACCEL accelerators, std::function<bool(MSG*)> translate)
-        : accelerators_(accelerators), translate_(std::move(translate)) {}
+    explicit Frame(std::shared_ptr<DocumentHost> host) : host_(std::move(host)) {}
 
     IFACEMETHODIMP QueryInterface(REFIID riid, void** object) override {
         if (!object) return E_POINTER;
@@ -146,25 +240,227 @@ public:
 
     IFACEMETHODIMP GetWindowContext(PREVIEWHANDLERFRAMEINFO* info) override {
         if (!info) return E_POINTER;
-        info->haccel = accelerators_;
-        info->cAccelEntries = accelerators_ ? static_cast<UINT>(CopyAcceleratorTableW(accelerators_, nullptr, 0)) : 0;
+        const HACCEL accelerators = host_->accelerators;  // set before the thread starts
+        info->haccel = accelerators;
+        info->cAccelEntries = accelerators ? static_cast<UINT>(CopyAcceleratorTableW(accelerators, nullptr, 0)) : 0;
         return S_OK;
     }
 
     IFACEMETHODIMP TranslateAccelerator(MSG* msg) override {
-        return (msg && translate_ && translate_(msg)) ? S_OK : S_FALSE;
+        if (!msg) return S_FALSE;
+        HWND owner;
+        {
+            std::lock_guard<std::mutex> lock(host_->mutex);
+            owner = host_->owner;
+        }
+        DWORD_PTR handled = 0;
+        if (!owner || !SendMessageTimeoutW(owner, WM_APP_DOCUMENT_ACCEL, 0, reinterpret_cast<LPARAM>(msg),
+                                           SMTO_NORMAL, 1000, &handled))
+            return S_FALSE;
+        return handled ? S_OK : S_FALSE;
     }
 
 private:
     ~Frame() = default;
     LONG refs_ = 1;
-    HACCEL accelerators_;
-    std::function<bool(MSG*)> translate_;
+    std::shared_ptr<DocumentHost> host_;
 };
 
-DocumentView::~DocumentView() { Unload(); }
+// Runs on the host thread: owns the preview handler, which may take a second
+// or two to start (Office's), so the UI thread never waits for it.
+class HostWorker {
+public:
+    explicit HostWorker(std::shared_ptr<DocumentHost> host) : host_(std::move(host)) {}
+
+    void Run(HINSTANCE instance, HANDLE ready) {
+        const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        WNDCLASSEXW wc = {sizeof(wc)};
+        if (!GetClassInfoExW(instance, kHostClassName, &wc)) {
+            wc = {sizeof(wc)};
+            wc.lpfnWndProc = &HostWorker::WndProc;
+            wc.hInstance = instance;
+            wc.lpszClassName = kHostClassName;
+            RegisterClassExW(&wc);
+        }
+        if (SUCCEEDED(com))
+            window_ = CreateWindowExW(0, kHostClassName, nullptr, 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
+        try {
+            frame_.Attach(new Frame(host_));  // starts with one reference
+        } catch (...) {
+        }
+        {
+            std::lock_guard<std::mutex> lock(host_->mutex);
+            host_->window = window_;
+        }
+        SetEvent(ready);
+        if (window_) {
+            MSG msg;
+            while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            {
+                std::lock_guard<std::mutex> lock(host_->mutex);
+                host_->window = nullptr;
+            }
+            // Requests posted before the window was forgotten: set their signals.
+            quitting_ = true;
+            while (PeekMessageW(&msg, window_, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+            Unload();
+            DestroyWindow(window_);
+        }
+        frame_.Reset();
+        if (SUCCEEDED(com)) CoUninitialize();
+    }
+
+private:
+    static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        if (msg == WM_NCCREATE) {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                              reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams));
+        }
+        auto* self = reinterpret_cast<HostWorker*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (!self) return DefWindowProcW(hwnd, msg, wParam, lParam);
+        switch (msg) {
+        case kHostLoad:
+            if (!self->quitting_) self->Load(static_cast<unsigned>(wParam));
+            return 0;
+        case kHostLayout:
+            if (!self->quitting_) self->Layout();
+            return 0;
+        case kHostColors:
+            if (!self->quitting_) self->Colors();
+            return 0;
+        case kHostUnload: {
+            self->Unload();
+            std::unique_ptr<std::shared_ptr<Signal>> signal(reinterpret_cast<std::shared_ptr<Signal>*>(lParam));
+            if (signal && *signal && (*signal)->event) SetEvent((*signal)->event);
+            return 0;
+        }
+        case kHostQuit:
+            PostQuitMessage(0);
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    void Report(unsigned generation, HRESULT hr) {
+        std::lock_guard<std::mutex> lock(host_->mutex);
+        if (host_->owner && host_->generation == generation)
+            PostMessageW(host_->owner, WM_APP_DOCUMENT_LOADED, generation, static_cast<LPARAM>(hr));
+    }
+
+    void Load(unsigned generation) {
+        Unload();
+        std::wstring path;
+        HWND owner;
+        {
+            std::lock_guard<std::mutex> lock(host_->mutex);
+            if (host_->generation != generation || !host_->owner) return;
+            path = host_->path;
+            owner = host_->owner;
+        }
+        const std::vector<CLSID> handlers = HandlersFor(path);
+        if (handlers.empty()) {
+            Report(generation, S_FALSE);
+            return;
+        }
+        // Try each registered handler until one shows the file.
+        HRESULT hr = E_FAIL;
+        for (const CLSID& clsid : handlers) {
+            if (!host_->Current(generation)) return;  // a newer request is queued
+            ComPtr<IPreviewHandler> handler;
+            ComPtr<IStream> stream;
+            hr = CreateHandler(clsid, path, handler, stream);
+            if (FAILED(hr)) continue;
+            ComPtr<IObjectWithSite> site;
+            if (frame_ && SUCCEEDED(handler.As(&site))) site->SetSite(frame_.Get());
+            RECT rect;
+            {
+                std::lock_guard<std::mutex> lock(host_->mutex);
+                rect = host_->rect;
+            }
+            hr = handler->SetWindow(owner, &rect);
+            if (FAILED(hr)) {
+                if (site) site->SetSite(nullptr);
+                continue;
+            }
+            handler_ = handler;
+            stream_ = stream;
+            Colors();
+            hr = handler->DoPreview();
+            if (SUCCEEDED(hr)) break;
+            Unload();
+        }
+        if (FAILED(hr)) Unload();
+        if (!host_->Current(generation)) {
+            Unload();
+            return;
+        }
+        Layout();  // the window may have been resized meanwhile
+        Report(generation, hr);
+    }
+
+    void Unload() {
+        if (handler_) {
+            handler_->Unload();
+            ComPtr<IObjectWithSite> site;
+            if (SUCCEEDED(handler_.As(&site))) site->SetSite(nullptr);
+            handler_.Reset();
+        }
+        stream_.Reset();
+    }
+
+    void Layout() {
+        if (!handler_) return;
+        RECT rect;
+        {
+            std::lock_guard<std::mutex> lock(host_->mutex);
+            rect = host_->rect;
+        }
+        handler_->SetRect(&rect);
+    }
+
+    void Colors() {
+        ComPtr<IPreviewHandlerVisuals> visuals;
+        if (!handler_ || FAILED(handler_.As(&visuals))) return;
+        COLORREF background, text;
+        {
+            std::lock_guard<std::mutex> lock(host_->mutex);
+            background = host_->background;
+            text = host_->text;
+        }
+        visuals->SetBackgroundColor(background);
+        visuals->SetTextColor(text);
+    }
+
+    std::shared_ptr<DocumentHost> host_;
+    HWND window_ = nullptr;
+    bool quitting_ = false;
+    ComPtr<IPreviewHandler> handler_;
+    ComPtr<IStream> stream_;  // kept alive while a stream-based handler previews
+    ComPtr<IPreviewHandlerFrame> frame_;
+};
+
+struct HostStart {
+    std::shared_ptr<DocumentHost> host;
+    HINSTANCE instance;
+    HANDLE ready;
+};
+
+DWORD WINAPI HostThread(void* parameter) {
+    std::unique_ptr<HostStart> start(static_cast<HostStart*>(parameter));
+    HostWorker worker(start->host);
+    worker.Run(start->instance, start->ready);
+    return 0;
+}
+
+}  // namespace
+
+DocumentView::~DocumentView() { StopHost(); }
 
 HRESULT DocumentView::Create(HWND parent, HINSTANCE instance, HACCEL accelerators, Callbacks callbacks) {
+    instance_ = instance;
     accelerators_ = accelerators;
     callbacks_ = std::move(callbacks);
     WNDCLASSEXW wc = {sizeof(wc)};
@@ -179,12 +475,44 @@ HRESULT DocumentView::Create(HWND parent, HINSTANCE instance, HACCEL accelerator
     hwnd_ = CreateWindowExW(0, kClassName, nullptr, WS_CHILD | WS_CLIPCHILDREN | WS_TABSTOP, 0, 0, 0, 0, parent,
                             nullptr, instance, this);
     if (!hwnd_) return HRESULT_FROM_WIN32(GetLastError());
-    try {
-        frame_.Attach(new Frame(accelerators_, callbacks_.translateAccelerator));  // starts with one reference
-    } catch (...) {
-        frame_.Reset();
-    }
     return S_OK;
+}
+
+bool DocumentView::StartHost() {
+    if (host_ && thread_) return true;
+    if (!hwnd_) return false;
+    try {
+        host_ = std::make_shared<DocumentHost>();
+    } catch (...) {
+        return false;
+    }
+    host_->owner = hwnd_;
+    host_->accelerators = accelerators_;
+    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!ready) return false;
+    HostStart* start = new (std::nothrow) HostStart{host_, instance_, ready};
+    if (start) thread_ = CreateThread(nullptr, 0, &HostThread, start, 0, nullptr);
+    if (!thread_) delete start;
+    else WaitForSingleObject(ready, 5000);  // the thread only creates its window first
+    CloseHandle(ready);
+    return thread_ != nullptr;
+}
+
+void DocumentView::StopHost() {
+    if (!host_) return;
+    {
+        std::lock_guard<std::mutex> lock(host_->mutex);
+        host_->owner = nullptr;
+        ++host_->generation;
+    }
+    if (thread_) {
+        host_->Post(kHostQuit, 0, 0);
+        // A handler that hangs is left to finish on its own.
+        WaitAnsweringSent(thread_, 2000);
+        CloseHandle(thread_);
+        thread_ = nullptr;
+    }
+    host_.reset();
 }
 
 LRESULT CALLBACK DocumentView::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -197,7 +525,7 @@ LRESULT CALLBACK DocumentView::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         self = reinterpret_cast<DocumentView*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     }
     if (msg == WM_NCDESTROY && self) {
-        self->Unload();
+        self->StopHost();
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         self->hwnd_ = nullptr;
         return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -213,9 +541,12 @@ LRESULT DocumentView::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_ERASEBKGND:
         return 1;
     case WM_SIZE:
-        if (handler_) {
-            const RECT rc = HandlerRect();
-            handler_->SetRect(&rc);
+        if (host_) {
+            {
+                std::lock_guard<std::mutex> lock(host_->mutex);
+                GetClientRect(hwnd_, &host_->rect);
+            }
+            host_->Post(kHostLayout, 0, 0);
         }
         InvalidateRect(hwnd_, nullptr, FALSE);
         return 0;
@@ -226,97 +557,103 @@ LRESULT DocumentView::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_LBUTTONDOWN:
         SetFocus(hwnd_);
         return 0;
-    case WM_APP_DOCUMENT_LOAD:
-        Load();
+    case WM_APP_DOCUMENT_LOADED:
+        OnLoaded(static_cast<unsigned>(wParam), static_cast<HRESULT>(lParam));
         return 0;
+    case WM_APP_DOCUMENT_ACCEL:
+        return (callbacks_.translateAccelerator && lParam &&
+                callbacks_.translateAccelerator(reinterpret_cast<MSG*>(lParam)))
+                   ? 1
+                   : 0;
     }
     return DefWindowProcW(hwnd_, msg, wParam, lParam);
 }
 
-RECT DocumentView::HandlerRect() const {
-    RECT rc{};
-    GetClientRect(hwnd_, &rc);
-    return rc;
-}
-
 void DocumentView::Show(const std::wstring& path) {
-    Unload();
     path_ = path;
     state_ = State::Loading;
+    focusBefore_ = GetFocus();
+    if (StartHost()) {
+        const auto& p = theme::Current();
+        {
+            std::lock_guard<std::mutex> lock(host_->mutex);
+            generation_ = ++host_->generation;
+            host_->path = path;
+            GetClientRect(hwnd_, &host_->rect);
+            host_->background = fullscreen_ ? RGB(0, 0, 0) : p.surface;
+            host_->text = fullscreen_ ? RGB(220, 220, 220) : p.text;
+        }
+        if (!host_->Post(kHostLoad, generation_, 0)) {
+            state_ = State::Failed;
+            error_ = E_FAIL;
+        }
+    } else {
+        state_ = State::Failed;
+        error_ = E_OUTOFMEMORY;
+    }
     InvalidateRect(hwnd_, nullptr, FALSE);
     if (callbacks_.changed) callbacks_.changed();
-    // Paint "loading" and the status line first: starting a handler blocks.
-    PostMessageW(hwnd_, WM_APP_DOCUMENT_LOAD, 0, 0);
 }
 
-void DocumentView::Load() {
-    if (state_ != State::Loading || path_.empty()) return;
-    UpdateWindow(hwnd_);
-    const std::vector<CLSID> handlers = HandlersFor(path_);
-    if (handlers.empty()) {
+void DocumentView::OnLoaded(unsigned generation, HRESULT hr) {
+    if (generation != generation_ || state_ != State::Loading) return;
+    if (hr == S_FALSE) {
         state_ = State::NoHandler;
-        InvalidateRect(hwnd_, nullptr, FALSE);
-        if (callbacks_.changed) callbacks_.changed();
-        return;
-    }
-    // Try each registered handler until one shows the file.
-    HRESULT hr = E_FAIL;
-    for (const CLSID& clsid : handlers) {
-        ComPtr<IPreviewHandler> handler;
-        ComPtr<IStream> stream;
-        hr = CreateHandler(clsid, path_, handler, stream);
-        if (SUCCEEDED(hr) && frame_) {
-            ComPtr<IObjectWithSite> site;
-            if (SUCCEEDED(handler.As(&site))) site->SetSite(frame_.Get());
-        }
-        if (SUCCEEDED(hr)) {
-            const RECT rc = HandlerRect();
-            hr = handler->SetWindow(hwnd_, &rc);
-        }
-        if (SUCCEEDED(hr)) {
-            handler_ = handler;
-            stream_ = stream;
-            ApplyColors();
-            hr = handler->DoPreview();
-            if (FAILED(hr)) Unload();
-        }
-        if (SUCCEEDED(hr)) break;
-    }
-    error_ = hr;
-    if (FAILED(hr)) {
-        Unload();
+    } else if (FAILED(hr)) {
         state_ = State::Failed;
+        error_ = hr;
     } else {
         state_ = State::Shown;
-        SetFocus(hwnd_);  // the handler may have taken it
+        // The handler may have taken the focus; give it back.
+        const HWND now = GetFocus();
+        if (takeFocus_) {
+            if (IsWindowVisible(hwnd_)) SetFocus(hwnd_);
+        } else if (focusBefore_ && IsWindow(focusBefore_) && (!now || now == hwnd_ || IsChild(hwnd_, now))) {
+            SetFocus(focusBefore_);
+        }
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
     if (callbacks_.changed) callbacks_.changed();
-}
-
-void DocumentView::Unload() {
-    if (handler_) {
-        handler_->Unload();
-        ComPtr<IObjectWithSite> site;
-        if (SUCCEEDED(handler_.As(&site))) site->SetSite(nullptr);
-        handler_.Reset();
-    }
-    stream_.Reset();
 }
 
 void DocumentView::Clear() {
-    Unload();
     path_.clear();
     state_ = State::Empty;
+    if (host_) {
+        {
+            std::lock_guard<std::mutex> lock(host_->mutex);
+            generation_ = ++host_->generation;
+        }
+        host_->Post(kHostUnload, 0, 0);
+    }
     if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+void DocumentView::Release() {
+    const bool had = state_ != State::Empty;
+    Clear();
+    if (!had || !host_ || !thread_) return;
+    // Wait until the handler has let go of the file, but not for long.
+    std::shared_ptr<Signal> signal = std::make_shared<Signal>();
+    if (!signal->event) return;
+    auto* payload = new (std::nothrow) std::shared_ptr<Signal>(signal);
+    if (!payload) return;
+    if (!host_->Post(kHostUnload, 0, reinterpret_cast<LPARAM>(payload))) {
+        delete payload;
+        return;
+    }
+    WaitAnsweringSent(signal->event, 3000);
+}
+
 void DocumentView::ApplyColors() {
-    ComPtr<IPreviewHandlerVisuals> visuals;
-    if (!handler_ || FAILED(handler_.As(&visuals))) return;
+    if (!host_) return;
     const auto& p = theme::Current();
-    visuals->SetBackgroundColor(fullscreen_ ? RGB(0, 0, 0) : p.surface);
-    visuals->SetTextColor(fullscreen_ ? RGB(220, 220, 220) : p.text);
+    {
+        std::lock_guard<std::mutex> lock(host_->mutex);
+        host_->background = fullscreen_ ? RGB(0, 0, 0) : p.surface;
+        host_->text = fullscreen_ ? RGB(220, 220, 220) : p.text;
+    }
+    host_->Post(kHostColors, 0, 0);
 }
 
 void DocumentView::SetFullscreen(bool fullscreen) {
