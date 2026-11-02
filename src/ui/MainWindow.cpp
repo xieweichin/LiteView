@@ -880,8 +880,9 @@ void MainWindow::Layout() {
     // Folder tree on the left, file list in the middle, preview on the right
     // (like Explorer's preview pane). The list keeps at least minPane.
     int left = Scale(leftWidth96_, dpi_);
-    left = std::min(left, width - splitter - minPane);
-    left = std::max(left, std::min(minPane, width / 2));
+    // Leave room for the list and, when shown, the preview at their minimum widths.
+    left = std::min(left, showPreview_ ? width - 2 * splitter - 2 * minPane : width - splitter - minPane);
+    left = std::max(left, std::min(minPane, width / 3));
     int preview = 0;
     if (showPreview_) {
         preview = Scale(previewWidth96_, dpi_);
