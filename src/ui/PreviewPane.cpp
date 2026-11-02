@@ -128,16 +128,31 @@ void PreviewPane::ShowDocument(bool show) {
     if (!show) {
         if (documentPath_.empty()) return;
         documentPath_.clear();
+        documentReleased_ = false;
         documents_.Clear();
         ShowWindow(documents_.Hwnd(), SW_HIDE);
         return;
     }
-    if (documentPath_ == path_) return;
+    if (documentPath_ == path_ && !documentReleased_) return;
     documentPath_ = path_;
+    documentReleased_ = false;
     RECT rc{};
     GetClientRect(hwnd_, &rc);
     SetWindowPos(documents_.Hwnd(), HWND_TOP, 0, 0, rc.right, rc.bottom, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     documents_.Show(path_);
+}
+
+void PreviewPane::ReleaseDocument() {
+    if (documentPath_.empty() || documentReleased_) return;
+    documents_.Release();
+    documentReleased_ = true;
+}
+
+void PreviewPane::RestoreDocument() {
+    if (!documentReleased_) return;
+    documentReleased_ = false;
+    if (!documentPath_.empty() && documentPath_ == path_ && GetFileAttributesW(path_.c_str()) != INVALID_FILE_ATTRIBUTES)
+        documents_.Show(path_);
 }
 
 LRESULT CALLBACK PreviewPane::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {

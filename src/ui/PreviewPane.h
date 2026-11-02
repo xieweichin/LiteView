@@ -28,6 +28,11 @@ public:
     // Shows `path` (empty clears the pane). Repeated calls with the same
     // path are ignored; rapid changes are coalesced.
     void Show(const std::wstring& path);
+    // A document shown by its preview handler can be held open by it; let
+    // go of it before the file is renamed, moved or deleted, and show it
+    // again afterwards if it is still there.
+    void ReleaseDocument();
+    void RestoreDocument();
 
 private:
     struct Shared {
@@ -64,5 +69,6 @@ private:
     // Explorer's preview pane; this child covers the pane while one is shown.
     DocumentView documents_;
     std::wstring documentPath_;
+    bool documentReleased_ = false;
     void ShowDocument(bool show);
 };

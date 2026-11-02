@@ -2093,7 +2093,9 @@ void MainWindow::CopyOrMoveSelection(bool move) {
     const std::wstring target = PickFolder(move ? IDS_PICK_MOVE_TARGET : IDS_PICK_COPY_TARGET);
     if (target.empty()) return;
     const int first = mode_ == Mode::Viewer ? ViewerIndex() : (list_->SelectedIndices().empty() ? -1 : list_->SelectedIndices().front());
+    ReleaseDocuments();
     const HRESULT hr = FileOps::CopyOrMove(hwnd_, paths, target, move);
+    RestoreDocuments();
     if (FAILED(hr)) {
         ShowError(IDS_ERR_FILE_OP, HexResult(hr));
         return;
@@ -2115,7 +2117,9 @@ void MainWindow::DeleteSelection() {
     const std::vector<std::wstring> paths = TargetPaths();
     if (paths.empty()) return;
     const int first = mode_ == Mode::Viewer ? ViewerIndex() : list_->SelectedIndices().front();
+    ReleaseDocuments();
     const HRESULT hr = FileOps::Recycle(hwnd_, paths);
+    RestoreDocuments();
     if (hr == S_FALSE) return;  // cancelled
     if (FAILED(hr)) {
         ShowError(IDS_ERR_FILE_OP, HexResult(hr));
@@ -2128,6 +2132,19 @@ void MainWindow::DeleteSelection() {
         selectIndexAfterLoad_ = first;
         Refresh();
     }
+}
+
+void MainWindow::ReleaseDocuments() {
+    preview_.ReleaseDocument();
+    if (mode_ == Mode::Viewer && viewerPageKind_ == ViewerPage::Document) documentView_.Release();
+}
+
+void MainWindow::RestoreDocuments() {
+    preview_.RestoreDocument();
+    if (mode_ == Mode::Viewer && viewerPageKind_ == ViewerPage::Document &&
+        documentView_.GetState() == DocumentView::State::Empty && !viewerPath_.empty() &&
+        GetFileAttributesW(viewerPath_.c_str()) != INVALID_FILE_ATTRIBUTES)
+        documentView_.Show(viewerPath_);
 }
 
 std::wstring MainWindow::UndoFilePath() {
@@ -2155,7 +2172,9 @@ void MainWindow::BatchRenameSelection() {
     std::vector<std::wstring> paths;
     paths.reserve(indices.size());
     for (int index : indices) paths.push_back(model_->FullPath(static_cast<std::size_t>(index)));
+    ReleaseDocuments();
     const HRESULT hr = ShowBatchRenameDialog(hwnd_, instance_, paths, UndoFilePath());
+    RestoreDocuments();
     if (hr == S_FALSE) return;
     if (FAILED(hr)) ShowError(IDS_ERR_BATCH_RENAME, HexResult(hr));
     selectIndexAfterLoad_ = indices.front();
@@ -2170,7 +2189,9 @@ void MainWindow::UndoBatchRename() {
         return;
     }
     HCURSOR old = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+    ReleaseDocuments();
     const HRESULT hr = BatchRename::UndoLast(undo);
+    RestoreDocuments();
     SetCursor(old);
     if (FAILED(hr)) ShowError(IDS_ERR_UNDO_RENAME, HexResult(hr));
     Refresh();
@@ -2206,7 +2227,9 @@ bool MainWindow::RenameItem(int index, const std::wstring& newName) {
     }
     const std::wstring from = model_->FullPath(static_cast<std::size_t>(index));
     const std::wstring to = (listFolder_.back() == L'\\' ? listFolder_ : listFolder_ + L'\\') + name;
+    ReleaseDocuments();
     const HRESULT hr = FileOps::Rename(from, to);
+    RestoreDocuments();
     if (FAILED(hr)) {
         ShowError(IDS_ERR_RENAME, name);
         return false;
