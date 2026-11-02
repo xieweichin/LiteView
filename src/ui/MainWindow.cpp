@@ -1916,7 +1916,8 @@ void MainWindow::UpdateViewerStatus() {
         case DocumentView::State::Loading: SetStatusText(2, LoadStr(IDS_VIEWER_LOADING)); break;
         case DocumentView::State::NoHandler: SetStatusText(2, LoadStr(IDS_DOC_NO_HANDLER_SHORT)); break;
         case DocumentView::State::Failed:
-            SetStatusText(2, Format(LoadStr(IDS_DOC_ERROR), HexResult(documentView_.Error())));
+            SetStatusText(2, Format(LoadStr(IDS_DOC_ERROR), HexResult(documentView_.Error()) + L" #" +
+                                                      std::to_wstring(documentView_.ErrorStep())));
             break;
         default: SetStatusText(2, LoadStr(IDS_DOC_PREVIEW)); break;
         }

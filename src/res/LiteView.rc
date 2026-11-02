@@ -14,8 +14,8 @@ IDI_APP ICON "LiteView.ico"
 
 // ---- Version ----------------------------------------------------------------
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,4,1,0
- PRODUCTVERSION 0,4,1,0
+ FILEVERSION 0,4,2,0
+ PRODUCTVERSION 0,4,2,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -27,11 +27,11 @@ BEGIN
         BLOCK "040404b0"
         BEGIN
             VALUE "FileDescription", "LiteView 看圖程式"
-            VALUE "FileVersion", "0.4.1"
+            VALUE "FileVersion", "0.4.2"
             VALUE "InternalName", "LiteView"
             VALUE "OriginalFilename", "LiteView.exe"
             VALUE "ProductName", "LiteView"
-            VALUE "ProductVersion", "0.4.1"
+            VALUE "ProductVersion", "0.4.2"
         END
     END
     BLOCK "VarFileInfo"
@@ -209,7 +209,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_APP_TITLE           "LiteView"
-    IDS_ABOUT_TEXT          "LiteView 0.4.1\n輕巧快速的看圖程式。"
+    IDS_ABOUT_TEXT          "LiteView 0.4.2\n輕巧快速的看圖程式。"
     IDS_STATUS_READY        "就緒"
     IDS_NOT_IMPLEMENTED     "這個功能還沒做好。"
     IDS_ERR_STARTUP         "LiteView 無法啟動（錯誤碼 %s）。"
