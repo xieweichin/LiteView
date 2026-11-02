@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.25)
 cmake_policy(SET CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(LiteView VERSION 0.3.0 LANGUAGES CXX RC)
+project(LiteView VERSION 0.3.1 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

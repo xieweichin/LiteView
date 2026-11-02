@@ -4,7 +4,9 @@
 #include <shlwapi.h>
 
 #include <algorithm>
+#include <cwchar>
 #include <utility>
+#include <vector>
 
 #include "res/resource.h"
 #include "ui/Messages.h"
@@ -18,16 +20,96 @@ constexpr wchar_t kClassName[] = L"LiteViewDocumentView";
 // Shell extension key of preview handlers (IPreviewHandler's IID).
 constexpr wchar_t kPreviewHandlerKey[] = L"{8895b1c6-b41f-4c1c-a562-0d564250836f}";
 
-bool HandlerFor(const std::wstring& path, CLSID& clsid) {
+void AddClsid(const wchar_t* text, std::vector<CLSID>& out) {
+    CLSID clsid{};
+    if (!text || !*text || FAILED(CLSIDFromString(text, &clsid))) return;
+    if (std::find(out.begin(), out.end(), clsid) == out.end()) out.push_back(clsid);
+}
+
+// Default value of HKCR\<key> as text, or empty.
+std::wstring ClassesValue(const std::wstring& key, const wchar_t* value = nullptr) {
+    wchar_t text[256] = {};
+    DWORD size = sizeof(text);
+    if (RegGetValueW(HKEY_CLASSES_ROOT, key.c_str(), value, RRF_RT_REG_SZ, nullptr, text, &size) != ERROR_SUCCESS)
+        return std::wstring();
+    return text;
+}
+
+// Every preview handler registered for the file type, in the order Explorer
+// looks: the association (the default app's ProgID), then the extension, the
+// system file associations, the ProgID named by the extension and the other
+// ProgIDs that can open it. Office registers on its ProgIDs, and the default
+// app for .docx may be another program, so the first lookup alone can miss.
+std::vector<CLSID> HandlersFor(const std::wstring& path) {
+    std::vector<CLSID> handlers;
     const wchar_t* extension = PathFindExtensionW(path.c_str());
-    if (!*extension) return false;
+    if (!*extension) return handlers;
     wchar_t text[64] = {};
     DWORD length = ARRAYSIZE(text);
-    if (FAILED(AssocQueryStringW(ASSOCF_INIT_DEFAULTTOSTAR, ASSOCSTR_SHELLEXTENSION, extension, kPreviewHandlerKey,
-                                 text, &length))) {
-        return false;
+    if (SUCCEEDED(AssocQueryStringW(ASSOCF_INIT_DEFAULTTOSTAR, ASSOCSTR_SHELLEXTENSION, extension, kPreviewHandlerKey,
+                                    text, &length)))
+        AddClsid(text, handlers);
+    const std::wstring shellEx = std::wstring(L"\\ShellEx\\") + kPreviewHandlerKey;
+    const std::wstring ext = extension;
+    AddClsid(ClassesValue(ext + shellEx).c_str(), handlers);
+    AddClsid(ClassesValue(L"SystemFileAssociations\\" + ext + shellEx).c_str(), handlers);
+    const std::wstring progId = ClassesValue(ext);
+    if (!progId.empty()) AddClsid(ClassesValue(progId + shellEx).c_str(), handlers);
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CLASSES_ROOT, (ext + L"\\OpenWithProgids").c_str(), 0, KEY_READ, &key) == ERROR_SUCCESS) {
+        for (DWORD i = 0; i < 64; ++i) {
+            wchar_t name[256] = {};
+            DWORD nameLength = ARRAYSIZE(name);
+            if (RegEnumValueW(key, i, name, &nameLength, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+            if (*name) AddClsid(ClassesValue(std::wstring(name) + shellEx).c_str(), handlers);
+        }
+        RegCloseKey(key);
     }
-    return SUCCEEDED(CLSIDFromString(text, &clsid));
+    const std::wstring perceived = ClassesValue(ext, L"PerceivedType");
+    if (!perceived.empty()) AddClsid(ClassesValue(L"SystemFileAssociations\\" + perceived + shellEx).c_str(), handlers);
+    return handlers;
+}
+
+// Creates the handler and gives it the file. Handlers support one or more of
+// the three initialisation interfaces, and some refuse one they also
+// implement (Office's handlers prefer a stream), so each is tried on a fresh
+// instance until one accepts.
+HRESULT CreateHandler(const CLSID& clsid, const std::wstring& path, ComPtr<IPreviewHandler>& handler,
+                      ComPtr<IStream>& stream) {
+    HRESULT last = E_NOINTERFACE;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        ComPtr<IPreviewHandler> candidate;
+        // Handlers normally run isolated in a surrogate process (prevhost.exe).
+        HRESULT hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(candidate.GetAddressOf()));
+        if (FAILED(hr))
+            hr = CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(candidate.GetAddressOf()));
+        if (FAILED(hr)) return hr;
+        ComPtr<IStream> candidateStream;
+        if (attempt == 0) {
+            ComPtr<IInitializeWithStream> withStream;
+            if (FAILED(candidate.As(&withStream))) continue;
+            hr = SHCreateStreamOnFileEx(path.c_str(), STGM_READ | STGM_SHARE_DENY_NONE, FILE_ATTRIBUTE_NORMAL, FALSE,
+                                        nullptr, candidateStream.GetAddressOf());
+            if (SUCCEEDED(hr)) hr = withStream->Initialize(candidateStream.Get(), STGM_READ);
+        } else if (attempt == 1) {
+            ComPtr<IInitializeWithFile> withFile;
+            if (FAILED(candidate.As(&withFile))) continue;
+            hr = withFile->Initialize(path.c_str(), STGM_READ);
+        } else {
+            ComPtr<IInitializeWithItem> withItem;
+            if (FAILED(candidate.As(&withItem))) continue;
+            ComPtr<IShellItem> item;
+            hr = SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(item.GetAddressOf()));
+            if (SUCCEEDED(hr)) hr = withItem->Initialize(item.Get(), STGM_READ);
+        }
+        if (SUCCEEDED(hr)) {
+            handler = candidate;
+            stream = candidateStream;
+            return S_OK;
+        }
+        last = hr;
+    }
+    return last;
 }
 
 std::wstring LoadStr(UINT id) {
@@ -170,50 +252,37 @@ void DocumentView::Show(const std::wstring& path) {
 void DocumentView::Load() {
     if (state_ != State::Loading || path_.empty()) return;
     UpdateWindow(hwnd_);
-    CLSID clsid{};
-    if (!HandlerFor(path_, clsid)) {
+    const std::vector<CLSID> handlers = HandlersFor(path_);
+    if (handlers.empty()) {
         state_ = State::NoHandler;
         InvalidateRect(hwnd_, nullptr, FALSE);
         if (callbacks_.changed) callbacks_.changed();
         return;
     }
-    // Handlers normally run isolated in a surrogate process (prevhost.exe).
-    ComPtr<IPreviewHandler> handler;
-    HRESULT hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(handler.GetAddressOf()));
-    if (FAILED(hr)) hr = CoCreateInstance(clsid, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(handler.GetAddressOf()));
-    ComPtr<IStream> stream;
-    if (SUCCEEDED(hr)) {
-        ComPtr<IInitializeWithFile> withFile;
-        ComPtr<IInitializeWithItem> withItem;
-        ComPtr<IInitializeWithStream> withStream;
-        if (SUCCEEDED(handler.As(&withFile))) {
-            hr = withFile->Initialize(path_.c_str(), STGM_READ);
-        } else if (SUCCEEDED(handler.As(&withItem))) {
-            ComPtr<IShellItem> item;
-            hr = SHCreateItemFromParsingName(path_.c_str(), nullptr, IID_PPV_ARGS(item.GetAddressOf()));
-            if (SUCCEEDED(hr)) hr = withItem->Initialize(item.Get(), STGM_READ);
-        } else if (SUCCEEDED(handler.As(&withStream))) {
-            hr = SHCreateStreamOnFileEx(path_.c_str(), STGM_READ | STGM_SHARE_DENY_NONE, FILE_ATTRIBUTE_NORMAL, FALSE,
-                                        nullptr, stream.GetAddressOf());
-            if (SUCCEEDED(hr)) hr = withStream->Initialize(stream.Get(), STGM_READ);
-        } else {
-            hr = E_NOINTERFACE;
+    // Try each registered handler until one shows the file.
+    HRESULT hr = E_FAIL;
+    for (const CLSID& clsid : handlers) {
+        ComPtr<IPreviewHandler> handler;
+        ComPtr<IStream> stream;
+        hr = CreateHandler(clsid, path_, handler, stream);
+        if (SUCCEEDED(hr) && frame_) {
+            ComPtr<IObjectWithSite> site;
+            if (SUCCEEDED(handler.As(&site))) site->SetSite(frame_.Get());
         }
+        if (SUCCEEDED(hr)) {
+            const RECT rc = HandlerRect();
+            hr = handler->SetWindow(hwnd_, &rc);
+        }
+        if (SUCCEEDED(hr)) {
+            handler_ = handler;
+            stream_ = stream;
+            ApplyColors();
+            hr = handler->DoPreview();
+            if (FAILED(hr)) Unload();
+        }
+        if (SUCCEEDED(hr)) break;
     }
-    if (SUCCEEDED(hr) && frame_) {
-        ComPtr<IObjectWithSite> site;
-        if (SUCCEEDED(handler.As(&site))) site->SetSite(frame_.Get());
-    }
-    if (SUCCEEDED(hr)) {
-        const RECT rc = HandlerRect();
-        hr = handler->SetWindow(hwnd_, &rc);
-    }
-    if (SUCCEEDED(hr)) {
-        handler_ = handler;
-        stream_ = stream;
-        ApplyColors();
-        hr = handler->DoPreview();
-    }
+    error_ = hr;
     if (FAILED(hr)) {
         Unload();
         state_ = State::Failed;
@@ -278,7 +347,14 @@ void DocumentView::OnPaint() {
     default: break;
     }
     if (message) {
-        const std::wstring text = LoadStr(message);
+        std::wstring text = LoadStr(message);
+        if (state_ == State::Failed) {
+            // The code helps tell a missing component from a damaged file.
+            wchar_t code[16] = {};
+            swprintf(code, 16, L"0x%08lX", static_cast<unsigned long>(error_));
+            const auto at = text.find(L"%s");
+            if (at != std::wstring::npos) text.replace(at, 2, code);
+        }
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, fullscreen_ ? RGB(220, 220, 220) : p.text);
         HGDIOBJ old = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
