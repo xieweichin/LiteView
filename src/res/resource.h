@@ -121,3 +121,7 @@
 #define IDS_VIDEO_PLAYING           2103
 #define IDS_VIDEO_PAUSED            2104
 #define IDS_VIDEO_ENDED             2105
+
+// Preview pane
+#define IDS_PREVIEW_EMPTY           2200
+#define IDS_PREVIEW_NONE            2201

@@ -8,8 +8,10 @@
 
 class ThreadPool;
 
-// Bottom-left preview of the selected picture, fitted into the pane and
-// centred, never enlarged; a text file shows its first lines. Decoding runs on its own background thread;
+// Right-hand preview of the selected file (pictures, PDF, vector, 3D, and the
+// shell's thumbnail for Office documents and videos), fitted into the pane and
+// centred, never enlarged; a text file shows its first lines. With nothing
+// to show, a short hint is drawn instead. Decoding runs on its own background thread;
 // only the latest request is kept.
 class PreviewPane {
 public:
@@ -36,11 +38,13 @@ private:
         unsigned bitmapToken = 0;
         std::wstring text;    // a text file's first lines (shown instead of a bitmap)
         bool hasText = false;
+        bool failed = false;  // the latest request has no preview
     };
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
     void OnPaint();
+    void DrawHint(HDC dc, const RECT& rc, UINT id);
     void StartDecode();
     static void Decode(const std::shared_ptr<Shared>& shared, unsigned token, std::wstring path, UINT boxWidth,
                        UINT boxHeight) noexcept;
@@ -48,6 +52,8 @@ private:
     HWND hwnd_ = nullptr;
     HFONT textFont_ = nullptr;
     UINT textFontDpi_ = 0;
+    HFONT hintFont_ = nullptr;
+    UINT hintFontDpi_ = 0;
     std::wstring path_;
     SIZE decodedFor_{};  // pane size of the last decode
     std::shared_ptr<Shared> shared_;

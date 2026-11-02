@@ -12,6 +12,7 @@
 #include "core/TextDocument.h"
 #include "core/ThreadPool.h"
 #include "core/ThumbnailService.h"
+#include "res/resource.h"
 #include "ui/Messages.h"
 #include "ui/Theme.h"
 
@@ -97,6 +98,7 @@ PreviewPane::~PreviewPane() {
     pool_->Shutdown();
     if (shared_->bitmap) DeleteObject(shared_->bitmap);
     if (textFont_) DeleteObject(textFont_);
+    if (hintFont_) DeleteObject(hintFont_);
 }
 
 HRESULT PreviewPane::Create(HWND parent, HINSTANCE instance) {
@@ -185,6 +187,7 @@ void PreviewPane::Show(const std::wstring& path) {
             shared_->text.clear();
             shared_->hasText = false;
         }
+        shared_->failed = false;
     }
     pool_->CancelPending();
     if (path.empty()) {
@@ -230,6 +233,7 @@ void PreviewPane::Decode(const std::shared_ptr<Shared>& shared, unsigned token, 
         shared->bitmap = nullptr;
         shared->text = SUCCEEDED(hr) ? std::move(document.text) : std::wstring();
         shared->hasText = SUCCEEDED(hr);
+        shared->failed = FAILED(hr);
         shared->bitmapToken = token;
         if (shared->hwnd) PostMessageW(shared->hwnd, WM_APP_PREVIEW_READY, 0, 0);
         return;
@@ -249,10 +253,39 @@ void PreviewPane::Decode(const std::shared_ptr<Shared>& shared, unsigned token, 
     shared->bitmap = SUCCEEDED(hr) ? bitmap : nullptr;  // a broken file shows an empty pane
     shared->text.clear();
     shared->hasText = false;
+    shared->failed = FAILED(hr);
     shared->width = width;
     shared->height = height;
     shared->bitmapToken = token;
     if (shared->hwnd) PostMessageW(shared->hwnd, WM_APP_PREVIEW_READY, 0, 0);
+}
+
+void PreviewPane::DrawHint(HDC dc, const RECT& rc, UINT id) {
+    const UINT dpi = GetDpiForWindow(hwnd_);
+    if (!hintFont_ || hintFontDpi_ != dpi) {
+        if (hintFont_) DeleteObject(hintFont_);
+        hintFont_ = nullptr;
+        NONCLIENTMETRICSW metrics = {sizeof(metrics)};
+        if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, dpi)) {
+            hintFont_ = CreateFontIndirectW(&metrics.lfMessageFont);
+        }
+        hintFontDpi_ = dpi;
+    }
+    const wchar_t* text = nullptr;
+    const int length = LoadStringW(GetModuleHandleW(nullptr), id, reinterpret_cast<LPWSTR>(&text), 0);
+    if (length <= 0 || !text) return;
+    const int pad = MulDiv(12, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
+    RECT box{pad, pad, std::max(pad, static_cast<int>(rc.right) - pad), std::max(pad, static_cast<int>(rc.bottom) - pad)};
+    HGDIOBJ oldFont = SelectObject(dc, hintFont_ ? static_cast<HGDIOBJ>(hintFont_) : GetStockObject(DEFAULT_GUI_FONT));
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, theme::Current().subtleText);
+    // Centre the (possibly wrapped) text in the pane.
+    RECT measure = box;
+    DrawTextW(dc, text, length, &measure, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+    const int textHeight = measure.bottom - measure.top;
+    box.top = std::max(box.top, (static_cast<LONG>(rc.bottom) - textHeight) / 2);
+    DrawTextW(dc, text, length, &box, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+    SelectObject(dc, oldFont);
 }
 
 void PreviewPane::OnPaint() {
@@ -301,6 +334,8 @@ void PreviewPane::OnPaint() {
             AlphaBlend(memory, x, y, dw, dh, source, 0, 0, static_cast<int>(w), static_cast<int>(h), blend);
             SelectObject(source, old);
             DeleteDC(source);
+        } else if (path_.empty() || shared_->failed) {
+            DrawHint(memory, rc, path_.empty() ? IDS_PREVIEW_EMPTY : IDS_PREVIEW_NONE);
         }
     }
     BitBlt(dc, 0, 0, rc.right, rc.bottom, memory, 0, 0, SRCCOPY);

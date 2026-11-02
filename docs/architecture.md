@@ -47,7 +47,7 @@ Windows API    Win32 · ComCtl32 v6 · WIC · Direct2D · Shell (IFileOperation,
 | 介面 | `Theme` | 深色／淺色配色、標題列、標準控制項與對話框的深色樣式 | 外觀 |
 | 介面 | `FolderTree` | 左上資料夾樹，延遲展開子資料夾 | 資料夾樹 |
 | 介面 | `FileListView` | 虛擬 ListView（`LVS_OWNERDATA`），四種檢視、多選、自繪縮圖 | 縮圖清單、四種檢視 |
-| 介面 | `PreviewPane` | 左下預覽窗 | 預覽窗 |
+| 介面 | `PreviewPane` | 右側預覽窗格（可隱藏、可調寬） | 預覽窗 |
 | 介面 | `ViewerView` | Direct2D 看圖、縮放、拖曳、全螢幕、幻燈片計時器 | 檢視模式全部 |
 | 介面 | `dialogs/` | 批次改名、圖片資訊、設定對話方塊 | 批次改名、圖片資訊 |
 | 核心 | `FolderModel` | 列出圖檔、自然排序（`StrCmpLogicalW`）、監看資料夾變動 | 排序、F5 重整 |
