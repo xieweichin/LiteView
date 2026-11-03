@@ -242,7 +242,7 @@ BEGIN
     IDS_DOC_ERROR           "無法預覽這份文件（錯誤碼 %s）"
     IDS_DOC_NO_HANDLER      "這台電腦沒有這種檔案的預覽程式。\n安裝 Microsoft Office 或對應的軟體後，就能在這裡預覽。"
     IDS_DOC_NO_HANDLER_SHORT "沒有預覽程式"
-    IDS_DOC_INTERNET_ZONE   "此檔案有網際網路來源標記，Windows 可能會阻擋預覽。若您信任檔案與來源，可在檔案總管的檔案「內容」選擇「解除封鎖」，再重新選取檔案。"
+    IDS_DOC_INTERNET_ZONE   "此檔案有網際網路來源標記，Windows 可能阻擋預覽。如信任來源：在檔案總管右鍵選「內容」，勾選「解除封鎖」並按「確定」。回到瀏覽，先選別的檔案再選回。"
     IDS_PDF_PAGE            "第 %u / %u 頁（Ctrl+PageUp/PageDown 換頁）"
     IDS_MODEL_ERROR         "無法開啟這個 3D 檔"
     IDS_MODEL_TRIANGLES     "%u 個三角形（拖曳旋轉，/ 重設）"
