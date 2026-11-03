@@ -72,6 +72,7 @@ private:
     State state_ = State::Empty;
     HRESULT error_ = S_OK;  // why the last load failed
     int errorStep_ = 0;
+    bool errorInternetZone_ = false;
     bool takeFocus_ = true;
     bool fullscreen_ = false;
 };
