@@ -14,8 +14,8 @@ IDI_APP ICON "LiteView.ico"
 
 // ---- Version ----------------------------------------------------------------
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,4,2,0
- PRODUCTVERSION 0,4,2,0
+ FILEVERSION 0,4,3,0
+ PRODUCTVERSION 0,4,3,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -27,11 +27,11 @@ BEGIN
         BLOCK "040404b0"
         BEGIN
             VALUE "FileDescription", "LiteView 看圖程式"
-            VALUE "FileVersion", "0.4.2"
+            VALUE "FileVersion", "0.4.3"
             VALUE "InternalName", "LiteView"
             VALUE "OriginalFilename", "LiteView.exe"
             VALUE "ProductName", "LiteView"
-            VALUE "ProductVersion", "0.4.2"
+            VALUE "ProductVersion", "0.4.3"
         END
     END
     BLOCK "VarFileInfo"
@@ -209,7 +209,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_APP_TITLE           "LiteView"
-    IDS_ABOUT_TEXT          "LiteView 0.4.2\n輕巧快速的看圖程式。"
+    IDS_ABOUT_TEXT          "LiteView 0.4.3\n輕巧快速的看圖程式。"
     IDS_STATUS_READY        "就緒"
     IDS_NOT_IMPLEMENTED     "這個功能還沒做好。"
     IDS_ERR_STARTUP         "LiteView 無法啟動（錯誤碼 %s）。"
@@ -242,6 +242,7 @@ BEGIN
     IDS_DOC_ERROR           "無法預覽這份文件（錯誤碼 %s）"
     IDS_DOC_NO_HANDLER      "這台電腦沒有這種檔案的預覽程式。\n安裝 Microsoft Office 或對應的軟體後，就能在這裡預覽。"
     IDS_DOC_NO_HANDLER_SHORT "沒有預覽程式"
+    IDS_DOC_INTERNET_ZONE   "此檔案有網際網路來源標記，Windows 可能阻擋預覽。如信任來源：在檔案總管右鍵選「內容」，勾選「解除封鎖」並按「確定」。回到瀏覽，先選別的檔案再選回。"
     IDS_PDF_PAGE            "第 %u / %u 頁（Ctrl+PageUp/PageDown 換頁）"
     IDS_MODEL_ERROR         "無法開啟這個 3D 檔"
     IDS_MODEL_TRIANGLES     "%u 個三角形（拖曳旋轉，/ 重設）"

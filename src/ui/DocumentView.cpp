@@ -259,6 +259,14 @@ struct Failure {
     }
 };
 
+// Check on the host thread only: the path may be on a slow network drive.
+// A zone marker is a clue, not proof that it caused the preview failure.
+bool HasInternetZone(const std::wstring& path) {
+    const std::wstring stream = path + L":Zone.Identifier";
+    const UINT zone = GetPrivateProfileIntW(L"ZoneTransfer", L"ZoneId", 0, stream.c_str());
+    return zone >= 3 && zone <= 4;
+}
+
 // Creates the handler and gives it the file in the way `step` names.
 // Handlers support one or more of the initialisation interfaces and some
 // refuse one they also implement, so the caller tries each on a fresh
@@ -359,6 +367,7 @@ struct DocumentHost {
     COLORREF background = 0;
     COLORREF text = 0;
     int failedStep = 0;  // where the last failed load stopped (see Step)
+    bool failedInternetZone = false;
 
     bool Current(unsigned g) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -561,8 +570,10 @@ private:
         if (FAILED(hr)) {
             Unload();
             hr = failure.step ? failure.hr : hr;
+            const bool internetZone = HasInternetZone(path);
             std::lock_guard<std::mutex> lock(host_->mutex);
             host_->failedStep = failure.step;
+            host_->failedInternetZone = internetZone;
         }
         if (!host_->Current(generation)) {
             Unload();
@@ -743,6 +754,7 @@ LRESULT DocumentView::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 void DocumentView::Show(const std::wstring& path) {
     path_ = path;
     state_ = State::Loading;
+    errorInternetZone_ = false;
     focusBefore_ = GetFocus();
     if (StartHost()) {
         const auto& p = theme::Current();
@@ -778,6 +790,7 @@ void DocumentView::OnLoaded(unsigned generation, HRESULT hr) {
         {
             std::lock_guard<std::mutex> lock(host_->mutex);
             errorStep_ = host_->failedStep;
+            errorInternetZone_ = host_->failedInternetZone;
         }
     } else {
         state_ = State::Shown;
@@ -868,6 +881,10 @@ void DocumentView::OnPaint() {
             swprintf(code, 32, L"0x%08lX #%d", static_cast<unsigned long>(error_), errorStep_);
             const auto at = text.find(L"%s");
             if (at != std::wstring::npos) text.replace(at, 2, code);
+            if (errorInternetZone_) {
+                text += L"\n\n";
+                text += LoadStr(IDS_DOC_INTERNET_ZONE);
+            }
         }
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, fullscreen_ ? RGB(220, 220, 220) : p.text);
